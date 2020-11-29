@@ -1,3 +1,7 @@
 domain: skyscanner.net
 repo: github.com/maruina/argocd-progressive-rollout-controller
+resources:
+- group: deployment
+  kind: ProgressiveRollout
+  version: v1alpha1
 version: "2"
