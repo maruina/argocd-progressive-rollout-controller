@@ -1,0 +1,3 @@
+domain: skyscanner.net
+repo: github.com/maruina/argocd-progressive-rollout-controller
+version: "2"
