@@ -18,12 +18,18 @@ package controllers
 
 import (
 	"context"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	argov1alpha1 "github.com/argoproj/argo-cd/pkg/apis/application/v1alpha1"
 	deploymentv1alpha1 "github.com/maruina/argocd-progressive-rollout-controller/api/v1alpha1"
 )
 
@@ -32,6 +38,11 @@ type ProgressiveRolloutReconciler struct {
 	client.Client
 	Log    logr.Logger
 	Scheme *runtime.Scheme
+}
+
+type applicationWatchMapper struct {
+	client.Client
+	Log logr.Logger
 }
 
 // +kubebuilder:rbac:groups=deployment.skyscanner.net,resources=progressiverollouts,verbs=get;list;watch;create;update;patch;delete
@@ -49,5 +60,35 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 func (r *ProgressiveRolloutReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&deploymentv1alpha1.ProgressiveRollout{}).
+		Watches(
+			&source.Kind{Type: &argov1alpha1.Application{}},
+			&handler.EnqueueRequestsFromMapFunc{ToRequests: &applicationWatchMapper{r.Client, r.Log}},
+		).
 		Complete(r)
+}
+
+// Map maps an Application event to the matching ProgressiveRollout
+func (a *applicationWatchMapper) Map(app handler.MapObject) []reconcile.Request {
+	var requests []reconcile.Request
+	pr, err := ListMatchingProgressiveRollout(a.Client, app.Meta)
+	if err != nil {
+		a.Log.Error(err, "error calling ListMatchingProgressiveRollout")
+		return requests
+	}
+	requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{
+		Name: pr.Name,
+		Namespace: pr.Namespace,
+	}})
+	return requests
+}
+
+// ListMatchingProgressiveRollout filters the Application by looking at the OwnerReference
+// and returns the ProgressiveRollout referencing it
+func ListMatchingProgressiveRollout(c client.Client, app metav1.Object ) (*deploymentv1alpha1.ProgressiveRollout, error) {
+	allProgressiveRollout := &deploymentv1alpha1.ProgressiveRolloutList{}
+	err := c.List(context.Background(), allProgressiveRollout,&client.ListOptions{Namespace: app.GetNamespace()})
+	if err != nil {
+		return nil, err
+	}
+	return nil, nil
 }
