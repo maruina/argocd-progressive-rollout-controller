@@ -70,25 +70,41 @@ func (r *ProgressiveRolloutReconciler) SetupWithManager(mgr ctrl.Manager) error 
 // Map maps an Application event to the matching ProgressiveRollout
 func (a *applicationWatchMapper) Map(app handler.MapObject) []reconcile.Request {
 	var requests []reconcile.Request
-	pr, err := ListMatchingProgressiveRollout(a.Client, app.Meta)
+	pr, err := a.ListMatchingProgressiveRollout(a.Client, app.Meta)
 	if err != nil {
 		a.Log.Error(err, "error calling ListMatchingProgressiveRollout")
 		return requests
 	}
-	requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{
-		Name: pr.Name,
-		Namespace: pr.Namespace,
-	}})
+	if pr != nil {
+		requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{
+			Name:      pr.Name,
+			Namespace: pr.Namespace,
+		}})
+	}
 	return requests
 }
 
 // ListMatchingProgressiveRollout filters the Application by looking at the OwnerReference
 // and returns the ProgressiveRollout referencing it
-func ListMatchingProgressiveRollout(c client.Client, app metav1.Object ) (*deploymentv1alpha1.ProgressiveRollout, error) {
+func (a *applicationWatchMapper) ListMatchingProgressiveRollout(c client.Client, app metav1.Object) (*deploymentv1alpha1.ProgressiveRollout, error) {
 	allProgressiveRollout := &deploymentv1alpha1.ProgressiveRolloutList{}
-	err := c.List(context.Background(), allProgressiveRollout,&client.ListOptions{Namespace: app.GetNamespace()})
+	err := c.List(context.Background(), allProgressiveRollout, &client.ListOptions{Namespace: app.GetNamespace()})
+
 	if err != nil {
 		return nil, err
 	}
+
+	// Check if the Application owner is reference by any ProgressiveRollout
+	for _, pr := range allProgressiveRollout.Items {
+		for _, owner := range app.GetOwnerReferences() {
+			a.Log.V(1).Info("Matching Application with ProgressiveRollout", "Application", app.GetName(), "OwnerReference", owner.String(), "ProgressiveRolloutSourceRef", pr.Spec.SourceRef.String())
+			if pr.Spec.SourceRef.Kind == owner.Kind && pr.Spec.SourceRef.Name == owner.Name && *pr.Spec.SourceRef.APIGroup == owner.APIVersion {
+				a.Log.V(1).Info("Match found", "Application", app.GetName(), "ProgressiveRollout", pr.Name)
+				return &pr, nil
+			}
+		}
+	}
+
+	// No match
 	return nil, nil
 }
