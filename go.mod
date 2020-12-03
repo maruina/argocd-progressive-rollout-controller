@@ -10,6 +10,7 @@ require (
 	github.com/onsi/gomega v1.10.1
 	go.uber.org/multierr v1.6.0 // indirect
 	go.uber.org/zap v1.16.0 // indirect
+	k8s.io/api v0.18.8
 	k8s.io/apimachinery v0.18.8
 	k8s.io/client-go v11.0.1-0.20190816222228-6d55c1b1f1ca+incompatible
 	sigs.k8s.io/controller-runtime v0.6.4
