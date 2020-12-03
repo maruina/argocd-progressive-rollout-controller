@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -28,8 +29,8 @@ type ProgressiveRolloutSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	// Foo is an example field of ProgressiveRollout. Edit ProgressiveRollout_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+	//SourceRef reference the ArgoCD Application Owner
+	SourceRef corev1.TypedLocalObjectReference `json:"sourceRef"`
 }
 
 // ProgressiveRolloutStatus defines the observed state of ProgressiveRollout
