@@ -2,6 +2,9 @@ apiVersion: deployment.skyscanner.net/v1alpha1
 kind: ProgressiveRollout
 metadata:
   name: progressiverollout-sample
+  namespace: argocd
 spec:
-  # Add fields here
-  foo: bar
+  sourceRef:
+    apiGroup: argoproj.io/v1alpha1
+    kind: ApplicationSet
+    name: appset-helm-dep

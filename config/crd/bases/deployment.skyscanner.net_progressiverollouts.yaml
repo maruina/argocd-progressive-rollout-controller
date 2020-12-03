@@ -34,10 +34,26 @@ spec:
         spec:
           description: ProgressiveRolloutSpec defines the desired state of ProgressiveRollout
           properties:
-            foo:
-              description: Foo is an example field of ProgressiveRollout. Edit ProgressiveRollout_types.go
-                to remove/update
-              type: string
+            sourceRef:
+              description: SourceRef reference the ArgoCD Application Owner
+              properties:
+                apiGroup:
+                  description: APIGroup is the group for the resource being referenced.
+                    If APIGroup is not specified, the specified Kind must be in the
+                    core API group. For any other third-party types, APIGroup is required.
+                  type: string
+                kind:
+                  description: Kind is the type of resource being referenced
+                  type: string
+                name:
+                  description: Name is the name of resource being referenced
+                  type: string
+              required:
+              - kind
+              - name
+              type: object
+          required:
+          - sourceRef
           type: object
         status:
           description: ProgressiveRolloutStatus defines the observed state of ProgressiveRollout
