@@ -30,7 +30,21 @@ type ProgressiveRolloutSpec struct {
 	// Important: Run "make" to regenerate code after modifying this file
 
 	//SourceRef reference the ArgoCD Application Owner
+	//+kubebuilder:validation:Required
 	SourceRef corev1.TypedLocalObjectReference `json:"sourceRef"`
+	// ProgressiveRolloutStage reference a list of ProgressiveRolloutStage
+	//+kubebuilder:validation:Required
+	Stages []*ProgressiveRolloutStage `json:"stages"`
+}
+
+// ProgressiveRolloutStage defines a rollout action
+type ProgressiveRolloutStage struct {
+	//Name identify the rollout stage
+	Name string `json:"name"`
+	//MaxUnavailable
+	//MaxCluster
+	//Clusters as labelselector
+	//Requeue as labelselector
 }
 
 // ProgressiveRolloutStatus defines the observed state of ProgressiveRollout
