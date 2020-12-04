@@ -15,4 +15,10 @@ spec:
       clusters:
         selector:
           matchLabels:
-            name: eu-west-1a-1
+            cluster: eu-west-1a-1
+      requeue:
+        selector:
+          matchLabels:
+            drained: "true"
+        attempts: 3
+        interval: 5m
