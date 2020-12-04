@@ -18,6 +18,7 @@ package controllers
 
 import (
 	"context"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -33,6 +34,11 @@ import (
 	deploymentv1alpha1 "github.com/maruina/argocd-progressive-rollout-controller/api/v1alpha1"
 )
 
+const (
+	ArgoCDSecretTypeLabel   = "argocd.argoproj.io/secret-type"
+	ArgoCDSecretTypeCluster = "cluster"
+)
+
 // ProgressiveRolloutReconciler reconciles a ProgressiveRollout object
 type ProgressiveRolloutReconciler struct {
 	client.Client
@@ -45,14 +51,126 @@ type applicationWatchMapper struct {
 	Log logr.Logger
 }
 
+// RolloutApp is a structure that contains a cluster, an Application targeting that cluster and various support variables
+type RolloutApp struct {
+	Cluster string
+	Server  string
+	App     string
+	Requeue bool
+}
+
 // +kubebuilder:rbac:groups=deployment.skyscanner.net,resources=progressiverollouts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=deployment.skyscanner.net,resources=progressiverollouts/status,verbs=get;update;patch
 
 func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
-	_ = context.Background()
-	_ = r.Log.WithValues("progressiverollout", req.NamespacedName)
+	ctx := context.Background()
+	log := r.Log.WithValues("progressiverollout", req.NamespacedName)
+	pr := deploymentv1alpha1.ProgressiveRollout{}
+	/* We trigger the reconciliation loop when:
+	1. the ProgressiveRollout changed
+	2. any of the Applications owned by spec.sourceRef changed
+	*/
 
-	// your logic here
+	// Get the ProgressiveRollout object
+	if err := r.Get(ctx, req.NamespacedName, &pr); err != nil {
+		log.Error(err, "unable to fetch ProgressiveRollout")
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// Iterate over the rollout stages
+	for i, stage := range pr.Spec.Stages {
+
+		log.V(1).Info("stage started", "stage", i)
+
+		// ArgoCD stores the clusters as Kubernetes secrets
+		//Get the spec.Clusters across all the secrets
+		clusterSecretList := corev1.SecretList{}
+		clusterSelector := metav1.AddLabelToSelector(&stage.Clusters.Selector, ArgoCDSecretTypeLabel, ArgoCDSecretTypeCluster)
+		clusterSecretSelector, err := metav1.LabelSelectorAsSelector(clusterSelector)
+		if err != nil {
+			log.Error(err, "unable to create the clusters selector")
+			return ctrl.Result{}, err
+		}
+		if err = r.List(ctx, &clusterSecretList, client.MatchingLabelsSelector{Selector: clusterSecretSelector}); err != nil {
+			log.Error(err, "unable to list selected cluster")
+		}
+		log.V(1).Info("found selected clusters", "num_cluster", len(clusterSecretList.Items))
+
+		// Get all spec.Requeue across all the secrets
+		// This is not a very elegant solution, because ideally we would like to do the selection across the previous result.
+		//It seems not possible because List is a client call to the k8s API and doesn't work on objects
+		// TODO: find if there is a better way
+		requeueSecretList := corev1.SecretList{}
+		requeueSecretSelector, err := metav1.LabelSelectorAsSelector(&stage.Requeue.Selector)
+		log.V(1).Info("requeue selector", "labels", requeueSecretSelector.String())
+		if err != nil {
+			log.Error(err, "unable to create the clusters selector")
+			return ctrl.Result{}, err
+		}
+		if err = r.List(ctx, &requeueSecretList, client.MatchingLabelsSelector{Selector: requeueSecretSelector}); err != nil {
+			log.Error(err, "unable to list selected cluster")
+		}
+		log.V(1).Info("found requeue clusters", "num_cluster", len(requeueSecretList.Items))
+
+		// Get all the Application owned by the spec.sourceRef
+		applicationList := argov1alpha1.ApplicationList{}
+		var ownedApplications []argov1alpha1.Application
+		err = r.List(ctx, &applicationList)
+		if err != nil {
+			log.Error(err, "unable to list applications")
+			return ctrl.Result{}, err
+		}
+		for i, app := range applicationList.Items {
+			for _, owner := range app.GetObjectMeta().GetOwnerReferences() {
+				if pr.Spec.SourceRef.Name == owner.Name && *pr.Spec.SourceRef.APIGroup == owner.APIVersion && pr.Spec.SourceRef.Kind == owner.Kind {
+					ownedApplications = append(ownedApplications, applicationList.Items[i])
+					log.V(1).Info("found owned applications", "application", app.Name)
+				}
+			}
+		}
+
+		/* At this point we have:
+		- clusterSecretList: a list of clusters we want to update in this stage
+		- requeueSecretList: the clusters that we should requeue
+		- the application that triggered the reconciliation loop
+		What we need to do next:
+		- find which cluster in clusterSecretList is also in requeueSecretList
+		- find which cluster belong to which application, so we can pass it to the argoCD
+		*/
+		var rolloutApps []RolloutApp
+		// Keep the applications matching the selected clusters
+		for _, app := range ownedApplications {
+			for _, cluster := range clusterSecretList.Items {
+				name := string(cluster.Data["name"])
+				server := string(cluster.Data["server"])
+				if app.Spec.Destination.Server == server {
+
+					log.V(1).Info("matched application and cluster", "application", app.Name, "cluster", name)
+
+					// rolloutApps should be an ordered list so we have the requeued clusters at the end
+					for _, rq := range requeueSecretList.Items {
+						if rq.Name == cluster.Name {
+							// This cluster matched on spec.clusters.selector AND spec.requeue.selector
+							rolloutApps = append(rolloutApps, RolloutApp{Cluster: cluster.Name, Server: server, App: app.Name, Requeue: true})
+
+						}
+					}
+				}
+				rolloutApps = append([]RolloutApp{{Cluster: cluster.Name, Server: server, App: app.Name, Requeue: false}}, rolloutApps...)
+
+			}
+		}
+		log.V(1).Info("syncTargets list built", "len", len(rolloutApps))
+	}
+
+	/*
+		Next steps:
+		- select the maxClusters to update
+		- select the maxUnavailable from the previous subgroup
+		- handle requeue
+		- use argocd cli to sync
+		- wait unntil they are all sync
+	*/
 
 	return ctrl.Result{}, nil
 }

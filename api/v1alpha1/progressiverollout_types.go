@@ -44,13 +44,13 @@ type ProgressiveRolloutStage struct {
 	//+kubebuilder:validation:Required
 	Name string `json:"name"`
 	//MaxUnavailable is how many selected clusters to update in parallel
-	MaxUnavailable intstr.IntOrString `json:"maxUnavailable"`
+	MaxUnavailable intstr.IntOrString `json:"maxUnavailable,omitempty"`
 	//MaxClusters is the maximum number of selected cluster to update
-	MaxClusters int `json:"maxClusters"`
+	MaxClusters int `json:"maxClusters,omitempty"`
 	//Cluster is how to select the target clusters for the Rollout
 	Clusters Cluster `json:"clusters"`
 	//Requeue is when to postpone the cluster update
-	Requeue Requeue `json:"requeue"`
+	Requeue Requeue `json:"requeue,omitempty"`
 }
 
 //Cluster defines how to select target clusters
@@ -64,7 +64,7 @@ type Requeue struct {
 	// Selector is a label selector to indicate when to requeue a cluster
 	Selector metav1.LabelSelector `json:"selector"`
 	// Interval is the time between attempts
-	Interval int `json:"interval"`
+	Interval metav1.Duration `json:"interval"`
 	// Attempts is how many times try to update a cluster before failing the Rollout
 	Attempts int `json:"attempts"`
 }
