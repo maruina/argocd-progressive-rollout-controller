@@ -19,6 +19,7 @@ package v1alpha1
 import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
@@ -39,12 +40,33 @@ type ProgressiveRolloutSpec struct {
 
 // ProgressiveRolloutStage defines a rollout action
 type ProgressiveRolloutStage struct {
-	//Name identify the rollout stage
+	//Name is a human friendly name for the stage
+	//+kubebuilder:validation:Required
 	Name string `json:"name"`
-	//MaxUnavailable
-	//MaxCluster
-	//Clusters as labelselector
-	//Requeue as labelselector
+	//MaxUnavailable is how many selected clusters to update in parallel
+	MaxUnavailable intstr.IntOrString `json:"maxUnavailable"`
+	//MaxClusters is the maximum number of selected cluster to update
+	MaxClusters int `json:"maxClusters"`
+	//Cluster is how to select the target clusters for the Rollout
+	Clusters Cluster `json:"clusters"`
+	//Requeue is when to postpone the cluster update
+	Requeue Requeue `json:"requeue"`
+}
+
+//Cluster defines how to select target clusters
+type Cluster struct {
+	//Selector is a label selector to get the clusters for the update
+	Selector metav1.LabelSelector `json:"selector"`
+}
+
+//Requeue defines when to requeue a cluster before updating it
+type Requeue struct {
+	// Selector is a label selector to indicate when to requeue a cluster
+	Selector metav1.LabelSelector `json:"selector"`
+	// Interval is the time between attempts
+	Interval int `json:"interval"`
+	// Attempts is how many times try to update a cluster before failing the Rollout
+	Attempts int `json:"attempts"`
 }
 
 // ProgressiveRolloutStatus defines the observed state of ProgressiveRollout
