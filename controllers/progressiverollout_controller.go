@@ -27,6 +27,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -51,12 +52,12 @@ type applicationWatchMapper struct {
 	Log logr.Logger
 }
 
-// RolloutApp is a structure that contains a cluster, an Application targeting that cluster and various support variables
+// RolloutApp is a structure to use during a Rollout
 type RolloutApp struct {
-	Cluster string
-	Server  string
-	App     string
-	Requeue bool
+	ClusterName string
+	Server      string
+	App         argov1alpha1.Application
+	Requeue     bool
 }
 
 // +kubebuilder:rbac:groups=deployment.skyscanner.net,resources=progressiverollouts,verbs=get;list;watch;create;update;patch;delete
@@ -151,27 +152,50 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 					for _, rq := range requeueSecretList.Items {
 						if rq.Name == cluster.Name {
 							// This cluster matched on spec.clusters.selector AND spec.requeue.selector
-							rolloutApps = append(rolloutApps, RolloutApp{Cluster: cluster.Name, Server: server, App: app.Name, Requeue: true})
-
+							rolloutApps = append(rolloutApps, RolloutApp{ClusterName: cluster.Name, Server: server, App: app, Requeue: true})
 						}
 					}
 				}
-				rolloutApps = append([]RolloutApp{{Cluster: cluster.Name, Server: server, App: app.Name, Requeue: false}}, rolloutApps...)
-
+				rolloutApps = append([]RolloutApp{{ClusterName: cluster.Name, Server: server, App: app, Requeue: false}}, rolloutApps...)
 			}
 		}
 		log.V(1).Info("syncTargets list built", "len", len(rolloutApps))
+
+		/*
+			Next steps:
+			- select the maxClusters to update
+			- select the maxUnavailable from the previous subgroup
+			- handle requeue
+			- use argocd cli to sync
+			- wait until they are all sync
+		*/
+
+		// Select the maximum number of clusters to update in this stage
+		maxRolloutApps := rolloutApps[0:stage.MaxClusters]
+		// Select how many of them in parallel
+		selectedRolloutApps, err := intstr.GetValueFromIntOrPercent(&stage.MaxUnavailable, stage.MaxClusters, true)
+		if err != nil {
+			log.Error(err, "failed to parse MaxUnavailable")
+		}
+		log.V(1).Info("selected rollout apps", "selectedRolloutApps", selectedRolloutApps)
+
+		// Find all the Application OutOfSync
+		var outOfSyncApps []RolloutApp
+		for _, app := range maxRolloutApps {
+			if app.App.Status.Sync.Status == argov1alpha1.SyncStatusCodeOutOfSync {
+				outOfSyncApps = append(outOfSyncApps, app)
+			}
+		}
+
+		for i := 0; i < selectedRolloutApps; i++ {
+			rolloutApp := outOfSyncApps[i]
+			if rolloutApp.Requeue {
+				// Add logic here to handle requeue
+			} else {
+				// Check if the App is already synced
+			}
+		}
 	}
-
-	/*
-		Next steps:
-		- select the maxClusters to update
-		- select the maxUnavailable from the previous subgroup
-		- handle requeue
-		- use argocd cli to sync
-		- wait unntil they are all sync
-	*/
-
 	return ctrl.Result{}, nil
 }
 
