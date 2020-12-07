@@ -4,6 +4,7 @@ go 1.13
 
 require (
 	github.com/argoproj/argo-cd v1.7.10
+	github.com/argoproj/gitops-engine v0.1.3-0.20200925215903-d25b8fd69f0d
 	github.com/go-logr/logr v0.3.0
 	github.com/go-logr/zapr v0.3.0 // indirect
 	github.com/onsi/ginkgo v1.12.1

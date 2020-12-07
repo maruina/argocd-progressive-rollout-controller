@@ -18,16 +18,19 @@ package controllers
 
 import (
 	"context"
+	"github.com/argoproj/gitops-engine/pkg/health"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"os/exec"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
+	"time"
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -52,12 +55,10 @@ type applicationWatchMapper struct {
 	Log logr.Logger
 }
 
-// RolloutApp is a structure to use during a Rollout
-type RolloutApp struct {
-	ClusterName string
-	Server      string
-	App         argov1alpha1.Application
-	Requeue     bool
+// RolloutItem is a structure to use during a Rollout
+type RolloutItem struct {
+	App     *argov1alpha1.Application
+	Requeue bool
 }
 
 // +kubebuilder:rbac:groups=deployment.skyscanner.net,resources=progressiverollouts,verbs=get;list;watch;create;update;patch;delete
@@ -68,8 +69,8 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 	log := r.Log.WithValues("progressiverollout", req.NamespacedName)
 	pr := deploymentv1alpha1.ProgressiveRollout{}
 	/* We trigger the reconciliation loop when:
-	1. the ProgressiveRollout changed
-	2. any of the Applications owned by spec.sourceRef changed
+	1. the ProgressiveRollout changes
+	2. any of the Applications owned by spec.sourceRef changes
 	*/
 
 	// Get the ProgressiveRollout object
@@ -136,9 +137,9 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 		- the application that triggered the reconciliation loop
 		What we need to do next:
 		- find which cluster in clusterSecretList is also in requeueSecretList
-		- find which cluster belong to which application, so we can pass it to the argoCD
+		- find which cluster belong to which application, so we can pass it to the argoCD CLI
 		*/
-		var rolloutApps []RolloutApp
+		var selectedApps, requeueSelectedApps, rolloutApps []RolloutItem
 		// Keep the applications matching the selected clusters
 		for _, app := range ownedApplications {
 			for _, cluster := range clusterSecretList.Items {
@@ -148,53 +149,70 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 
 					log.V(1).Info("matched application and cluster", "application", app.Name, "cluster", name)
 
-					// rolloutApps should be an ordered list so we have the requeued clusters at the end
 					for _, rq := range requeueSecretList.Items {
 						if rq.Name == cluster.Name {
 							// This cluster matched on spec.clusters.selector AND spec.requeue.selector
-							rolloutApps = append(rolloutApps, RolloutApp{ClusterName: cluster.Name, Server: server, App: app, Requeue: true})
+							requeueSelectedApps = append(requeueSelectedApps, RolloutItem{App: &app, Requeue: true})
 						}
 					}
 				}
-				rolloutApps = append([]RolloutApp{{ClusterName: cluster.Name, Server: server, App: app, Requeue: false}}, rolloutApps...)
+				selectedApps = append(selectedApps, RolloutItem{App: &app, Requeue: false})
 			}
 		}
-		log.V(1).Info("syncTargets list built", "len", len(rolloutApps))
+
+		// Add the Requeue clusters at the end of the list so we have less chances to select one and we give them more time to recover
+		selectedApps = append(selectedApps, requeueSelectedApps...)
 
 		/*
-			Next steps:
-			- select the maxClusters to update
-			- select the maxUnavailable from the previous subgroup
-			- handle requeue
-			- use argocd cli to sync
-			- wait until they are all sync
+			An Application can be:
+			- OutofSync -> we need to sync it
+			- OutOfSync but progressing, meaning we already started the synchronization in a previous loop, so we need to skip it
+			- Synced -> nothing else to do
 		*/
 
-		// Select the maximum number of clusters to update in this stage
-		maxRolloutApps := rolloutApps[0:stage.MaxClusters]
-		// Select how many of them in parallel
-		selectedRolloutApps, err := intstr.GetValueFromIntOrPercent(&stage.MaxUnavailable, stage.MaxClusters, true)
-		if err != nil {
-			log.Error(err, "failed to parse MaxUnavailable")
-		}
-		log.V(1).Info("selected rollout apps", "selectedRolloutApps", selectedRolloutApps)
-
-		// Find all the Application OutOfSync
-		var outOfSyncApps []RolloutApp
-		for _, app := range maxRolloutApps {
-			if app.App.Status.Sync.Status == argov1alpha1.SyncStatusCodeOutOfSync {
-				outOfSyncApps = append(outOfSyncApps, app)
+		var syncCounter, progressingCounter int
+		for _, item := range selectedApps {
+			if item.App.Status.Sync.Status == argov1alpha1.SyncStatusCodeOutOfSync {
+				// Application is out of sync -> we need to sync it
+				rolloutApps = append(rolloutApps, item)
+			} else if item.App.Status.Sync.Status == argov1alpha1.SyncStatusCodeSynced {
+				syncCounter++
+			} else if item.App.Status.Health.Status == health.HealthStatusProgressing {
+				progressingCounter++
 			}
 		}
 
-		for i := 0; i < selectedRolloutApps; i++ {
-			rolloutApp := outOfSyncApps[i]
-			if rolloutApp.Requeue {
-				// Add logic here to handle requeue
-			} else {
-				// Check if the App is already synced
+		log.V(1).Info("app status", "sync", syncCounter, "progressing", progressingCounter, "outofsync", len(rolloutApps))
+
+		// Max number of clusters to rollout. We need to remove the already synced ones.
+		rolloutClusters := stage.MaxClusters - syncCounter
+		rolloutUnavailable, err := intstr.GetValueFromIntOrPercent(&stage.MaxUnavailable, rolloutClusters, true)
+
+		log.V(1).Info("calculated variables", "rolloutClusters", rolloutClusters, "rolloutUnavailable", rolloutUnavailable)
+
+		// Check if we have any app that is out of sync
+		if len(rolloutApps) > 0 {
+			// The progressingClusters are counting against the maxUnavailable quota
+			for i := 0; i < (rolloutUnavailable - progressingCounter); i++ {
+				if rolloutApps[i].Requeue {
+					// TODO: handle requeue here
+					// Add an annotation and requeue after interval
+				} else {
+					log.V(1).Info("executing argocd app sync", "app", rolloutApps[i].App.Name)
+					cmd := exec.Command("argocd", "app", "sync", rolloutApps[i].App.Name, "--async", "--prune")
+					err = cmd.Run()
+					if err != nil {
+						log.Error(err, "error executing argocd cmd")
+						return ctrl.Result{}, err
+					}
+					// ArgoCD is syncing, requeue after 30s
+					return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+				}
 			}
+			// Make sure we don't progress to the next stage as long as we have OutOfSync apps, but protect against all of them being Progressing
+			return ctrl.Result{}, nil
 		}
+		// TODO: fail if everything is synced but we have unhealthy apps as we don't want to progress to the next stage
 	}
 	return ctrl.Result{}, nil
 }

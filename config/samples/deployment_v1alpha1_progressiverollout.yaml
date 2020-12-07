@@ -10,7 +10,7 @@ spec:
     name: appset-helm-dep
   stages:
     - name: eu-west-1a-1
-      maxUnavailable: 1
+      maxUnavailable: 50%
       maxClusters: 1
       clusters:
         selector:
