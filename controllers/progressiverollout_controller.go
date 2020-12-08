@@ -50,6 +50,7 @@ type ProgressiveRolloutReconciler struct {
 	Scheme *runtime.Scheme
 }
 
+// applicationWatchMapper is a support struct to filter Application events based on their owner
 type applicationWatchMapper struct {
 	client.Client
 	Log logr.Logger
@@ -67,13 +68,9 @@ type RolloutItem struct {
 func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	ctx := context.Background()
 	log := r.Log.WithValues("progressiverollout", req.NamespacedName)
-	pr := deploymentv1alpha1.ProgressiveRollout{}
-	/* We trigger the reconciliation loop when:
-	1. a ProgressiveRollout changes
-	2. any of the Applications owned by spec.sourceRef changes
-	*/
 
 	// Get the ProgressiveRollout object
+	pr := deploymentv1alpha1.ProgressiveRollout{}
 	if err := r.Get(ctx, req.NamespacedName, &pr); err != nil {
 		log.Error(err, "unable to fetch ProgressiveRollout", "object", pr.Name)
 		return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -85,8 +82,8 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 		log.V(1).Info("stage started", "stage", i)
 
 		// ArgoCD stores the clusters as Kubernetes secrets
-		//Get the spec.Clusters across all the secrets
 		clusterSecretList := corev1.SecretList{}
+		// Select based on the spec selector and the ArgoCD labels
 		clusterSelector := metav1.AddLabelToSelector(&stage.Clusters.Selector, ArgoCDSecretTypeLabel, ArgoCDSecretTypeCluster)
 		clusterSecretSelector, err := metav1.LabelSelectorAsSelector(clusterSelector)
 		if err != nil {
@@ -94,24 +91,27 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 			return ctrl.Result{}, err
 		}
 		if err = r.List(ctx, &clusterSecretList, client.MatchingLabelsSelector{Selector: clusterSecretSelector}); err != nil {
-			log.Error(err, "unable to list selected cluster")
+			log.Error(err, "unable to list clusters")
 		}
-		log.V(1).Info("found selected clusters", "num_cluster", len(clusterSecretList.Items))
+		log.V(1).Info("found clusters", "total", len(clusterSecretList.Items))
 
-		// Get all spec.Requeue across all the secrets
-		// This is not a very elegant solution, because ideally we would like to do the selection on clusterSecretList.
-		//It seems not possible because List is a client call to the k8s API and doesn't work on objects
-		// TODO: find if there is a better way
+		/*
+			Ideally we would like to select the Requeue clusters from clusterSecretList.
+			This is not possible because List is a client method and works on the k8s API and not an object.
+			The solution is to get every secret with the spec.Requeue.selector and match them with clusterSecretList.
+			If a secret is in both groups, it means it's a cluster we need to requeue
+			TODO: is there a better way?
+		*/
 		requeueSecretList := corev1.SecretList{}
 		requeueSecretSelector, err := metav1.LabelSelectorAsSelector(&stage.Requeue.Selector)
 		if err != nil {
-			log.Error(err, "unable to create the clusters selector")
+			log.Error(err, "unable to create the requeue selector")
 			return ctrl.Result{}, err
 		}
 		if err = r.List(ctx, &requeueSecretList, client.MatchingLabelsSelector{Selector: requeueSecretSelector}); err != nil {
-			log.Error(err, "unable to list selected cluster")
+			log.Error(err, "unable to list requeue clusters")
 		}
-		log.V(1).Info("found requeue clusters", "num_cluster", len(requeueSecretList.Items))
+		log.V(1).Info("found requeue clusters", "total", len(requeueSecretList.Items))
 
 		// Get all the Application owned by the spec.sourceRef
 		applicationList := argov1alpha1.ApplicationList{}
@@ -130,13 +130,10 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 			}
 		}
 
-		/* At this point we have:
-		- clusterSecretList: a list of clusters we want to update in this stage
-		- requeueSecretList: the clusters that we should requeue
-		- the application that triggered the reconciliation loop
-		What we need to do next:
-		- find which cluster in clusterSecretList is also in requeueSecretList
-		- find which cluster belong to which application, so we can pass it to the argoCD CLI
+		/*
+			Iterate over the Application list.
+			If it's targeting one of the clusters, we want to update that application.
+			If it's targeting on of the requeue clusters, append to the end of the list to reduce the likelihood to select it in the first pass.
 		*/
 		var selectedApps, requeueSelectedApps, rolloutApps []RolloutItem
 		// Keep the applications matching the selected clusters
@@ -159,16 +156,10 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 			}
 		}
 
-		// Add the Requeue clusters at the end of the list so we have less chances to select one and we give them more time to recover
+		// Add the Requeue clusters at the end of the list
 		selectedApps = append(selectedApps, requeueSelectedApps...)
 
-		/*
-			An Application can be:
-			- OutofSync -> we need to sync it
-			- OutOfSync but progressing, meaning we already started the synchronization in a previous loop, so we need to skip it
-			- Synced -> nothing else to do
-		*/
-
+		// Iterate over the selected Applications so we can build the rollout plan
 		var syncCounter, progressingCounter int
 		for _, item := range selectedApps {
 			if item.App.Status.Sync.Status == argov1alpha1.SyncStatusCodeOutOfSync {
@@ -181,38 +172,46 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 			}
 		}
 
-		log.V(1).Info("app status", "sync", syncCounter, "progressing", progressingCounter, "outofsync", len(rolloutApps))
+		log.V(1).Info("analyzed applications status", "sync", syncCounter, "progressing", progressingCounter, "outOfSync", len(rolloutApps))
 
-		// Max number of clusters to rollout. We need to remove the already synced ones.
-		rolloutClusters, err := intstr.GetValueFromIntOrPercent(&stage.MaxClusters,len(rolloutApps), true)
+		// Max number of clusters to sync
+		rolloutClusters, err := intstr.GetValueFromIntOrPercent(&stage.MaxClusters, len(rolloutApps), true)
+		// Remove the application that are already in sync.
 		rolloutClusters -= syncCounter
+		// Max number of clusters to sync per reconciliation
 		rolloutUnavailable, err := intstr.GetValueFromIntOrPercent(&stage.MaxUnavailable, rolloutClusters, true)
 
-		log.V(1).Info("calculated variables", "rolloutClusters", rolloutClusters, "rolloutUnavailable", rolloutUnavailable)
+		log.V(1).Info("planned rollout", "max clusters", rolloutClusters, "max unavailable", rolloutUnavailable)
 
 		// Check if we have any app that is out of sync
 		if len(rolloutApps) > 0 {
-			// The progressingClusters are part of the maxUnavailable quota
+			// progressingClusters is part of the maxUnavailable quota
 			for i := 0; i < (rolloutUnavailable - progressingCounter); i++ {
 				if rolloutApps[i].Requeue {
-					// TODO: handle requeue here
-					// Add an annotation and requeue after interval
+					/*
+						TODO: Add an annotation and requeue after
+					*/
 				} else {
-					log.V(1).Info("executing argocd app sync", "app", rolloutApps[i].App.Name)
 					cmd := exec.Command("argocd", "app", "sync", rolloutApps[i].App.Name, "--async", "--prune")
 					err = cmd.Run()
 					if err != nil {
 						log.Error(err, "error executing argocd cmd")
 						return ctrl.Result{}, err
 					}
+					log.V(1).Info("executed argocd app sync", "app", rolloutApps[i].App.Name)
 					// ArgoCD is syncing, requeue after 30s
 					return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 				}
 			}
-			// Make sure we don't progress to the next stage as long as we have OutOfSync apps, but protect against all of them being Progressing
+			/*
+				Protect against the case where we have OutOfSync apps but they are all Progressing
+			*/
 			return ctrl.Result{}, nil
 		}
-		// TODO: fail if everything is synced but we have unhealthy apps as we don't want to progress to the next stage
+		/*
+			TODO: if we are here it means the Applications are all in sync. We need to check their health as we don't want to progress the Rollout.
+			We still need to requeue the event as we want want to give the opportunity to fix the issue.
+		*/
 	}
 	return ctrl.Result{}, nil
 }
