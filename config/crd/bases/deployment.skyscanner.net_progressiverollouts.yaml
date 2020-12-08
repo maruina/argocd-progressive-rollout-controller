@@ -111,9 +111,12 @@ spec:
                     - selector
                     type: object
                   maxClusters:
+                    anyOf:
+                    - type: integer
+                    - type: string
                     description: MaxClusters is the maximum number of selected cluster
                       to update
-                    type: integer
+                    x-kubernetes-int-or-string: true
                   maxUnavailable:
                     anyOf:
                     - type: integer

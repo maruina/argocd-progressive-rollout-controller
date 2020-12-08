@@ -46,7 +46,7 @@ type ProgressiveRolloutStage struct {
 	//MaxUnavailable is how many selected clusters to update in parallel
 	MaxUnavailable intstr.IntOrString `json:"maxUnavailable,omitempty"`
 	//MaxClusters is the maximum number of selected cluster to update
-	MaxClusters int `json:"maxClusters,omitempty"`
+	MaxClusters intstr.IntOrString `json:"maxClusters,omitempty"`
 	//Cluster is how to select the target clusters for the Rollout
 	Clusters Cluster `json:"clusters"`
 	//Requeue is when to postpone the cluster update

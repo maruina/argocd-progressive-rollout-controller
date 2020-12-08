@@ -55,7 +55,7 @@ type applicationWatchMapper struct {
 	Log logr.Logger
 }
 
-// RolloutItem is a structure to use during a Rollout
+// RolloutItem is a support structure to use during a Rollout
 type RolloutItem struct {
 	App     *argov1alpha1.Application
 	Requeue bool
@@ -69,13 +69,13 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 	log := r.Log.WithValues("progressiverollout", req.NamespacedName)
 	pr := deploymentv1alpha1.ProgressiveRollout{}
 	/* We trigger the reconciliation loop when:
-	1. the ProgressiveRollout changes
+	1. a ProgressiveRollout changes
 	2. any of the Applications owned by spec.sourceRef changes
 	*/
 
 	// Get the ProgressiveRollout object
 	if err := r.Get(ctx, req.NamespacedName, &pr); err != nil {
-		log.Error(err, "unable to fetch ProgressiveRollout")
+		log.Error(err, "unable to fetch ProgressiveRollout", "object", pr.Name)
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
@@ -99,12 +99,11 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 		log.V(1).Info("found selected clusters", "num_cluster", len(clusterSecretList.Items))
 
 		// Get all spec.Requeue across all the secrets
-		// This is not a very elegant solution, because ideally we would like to do the selection across the previous result.
+		// This is not a very elegant solution, because ideally we would like to do the selection on clusterSecretList.
 		//It seems not possible because List is a client call to the k8s API and doesn't work on objects
 		// TODO: find if there is a better way
 		requeueSecretList := corev1.SecretList{}
 		requeueSecretSelector, err := metav1.LabelSelectorAsSelector(&stage.Requeue.Selector)
-		log.V(1).Info("requeue selector", "labels", requeueSecretSelector.String())
 		if err != nil {
 			log.Error(err, "unable to create the clusters selector")
 			return ctrl.Result{}, err
@@ -185,14 +184,15 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 		log.V(1).Info("app status", "sync", syncCounter, "progressing", progressingCounter, "outofsync", len(rolloutApps))
 
 		// Max number of clusters to rollout. We need to remove the already synced ones.
-		rolloutClusters := stage.MaxClusters - syncCounter
+		rolloutClusters, err := intstr.GetValueFromIntOrPercent(&stage.MaxClusters,len(rolloutApps), true)
+		rolloutClusters -= syncCounter
 		rolloutUnavailable, err := intstr.GetValueFromIntOrPercent(&stage.MaxUnavailable, rolloutClusters, true)
 
 		log.V(1).Info("calculated variables", "rolloutClusters", rolloutClusters, "rolloutUnavailable", rolloutUnavailable)
 
 		// Check if we have any app that is out of sync
 		if len(rolloutApps) > 0 {
-			// The progressingClusters are counting against the maxUnavailable quota
+			// The progressingClusters are part of the maxUnavailable quota
 			for i := 0; i < (rolloutUnavailable - progressingCounter); i++ {
 				if rolloutApps[i].Requeue {
 					// TODO: handle requeue here
@@ -227,7 +227,7 @@ func (r *ProgressiveRolloutReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		Complete(r)
 }
 
-// Map maps an Application event to the matching ProgressiveRollout
+// Map maps an Application event to the matching ProgressiveRollout object
 func (a *applicationWatchMapper) Map(app handler.MapObject) []reconcile.Request {
 	var requests []reconcile.Request
 	pr, err := a.ListMatchingProgressiveRollout(a.Client, app.Meta)

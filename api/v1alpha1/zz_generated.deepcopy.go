@@ -130,6 +130,7 @@ func (in *ProgressiveRolloutSpec) DeepCopy() *ProgressiveRolloutSpec {
 func (in *ProgressiveRolloutStage) DeepCopyInto(out *ProgressiveRolloutStage) {
 	*out = *in
 	out.MaxUnavailable = in.MaxUnavailable
+	out.MaxClusters = in.MaxClusters
 	in.Clusters.DeepCopyInto(&out.Clusters)
 	in.Requeue.DeepCopyInto(&out.Requeue)
 }

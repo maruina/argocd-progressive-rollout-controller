@@ -31,3 +31,5 @@ kubectl get pods -n argocd -l app.kubernetes.io/name=argocd-server -o name | cut
 cd <path/to/applicationset>
 IMAGE="maruina/argocd-applicationset:v0.1.0" make deploy
 ```
+
+❯ kubectl exec -it -n argocd argocd-server-6987c9748c-6x27q -- argocd login argocd-server.argocd.svc.cluster.local:443
