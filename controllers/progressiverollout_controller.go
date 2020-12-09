@@ -20,6 +20,7 @@ import (
 	"context"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
@@ -63,7 +64,6 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Iterate over the rollout stages
 	for i, stage := range pr.Spec.Stages {
 		r.Log.WithValues("stage", i)
 
@@ -73,7 +73,6 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 			r.Log.Error(err, "failed to get clusters")
 			return ctrl.Result{}, err
 		}
-
 		requeueList, err := utils.GetSecretListFromSelector(ctx, r.Client, &stage.Requeue.Selector)
 		if err != nil {
 			r.Log.Error(err, "failed to get requeue clusters")
@@ -93,7 +92,31 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 		for _, app := range requeueMatchingApps {
 			r.Log.V(1).Info("requeueSelectedApps", "name", app.Name)
 		}
+
+		// Get OutOfSync Applications so we can update them
+		outOfSyncApps := utils.GetAppsBySyncStatus(matchingApps, argov1alpha1.SyncStatusCodeOutOfSync)
+		for _, app := range outOfSyncApps {
+			r.Log.V(1).Info("outOfSyncApps", "name", app.Name)
+		}
+
+		// Get Sync Applications as they count against pr.stage.maxClusters
+		syncApps := utils.GetAppsBySyncStatus(matchingApps, argov1alpha1.SyncStatusCodeSynced)
+		for _, app := range syncApps {
+			r.Log.V(1).Info("syncApps", "name", app.Name)
+		}
+
+		/*
+			Calculate how many clusters and how many at the same time to update.
+			A Synced cluster counts against maxClusters
+			A Progressing cluster counts against MaxUnavailable
+		*/
+		maxClusters, err := intstr.GetValueFromIntOrPercent(&stage.MaxClusters, len(outOfSyncApps), true)
+		maxClusters = maxClusters - len(syncApps)
+		maxUnavailable, err := intstr.GetValueFromIntOrPercent(&stage.MaxUnavailable, maxClusters, true)
+		r.Log.V(1).Info("rollout plan", "maxClusters", maxClusters, "maxUnavailable", maxUnavailable)
+
 	}
+	r.Log.Info("reconciliation complete")
 	return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
 }
 

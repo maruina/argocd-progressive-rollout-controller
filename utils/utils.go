@@ -57,3 +57,13 @@ func MatchSecretListWithApps(apps []*argov1alpha1.Application, list *corev1.Secr
 	}
 	return match
 }
+
+func GetAppsBySyncStatus(apps []*argov1alpha1.Application, status argov1alpha1.SyncStatusCode) []*argov1alpha1.Application {
+	var res []*argov1alpha1.Application
+	for _, app := range apps {
+		if app.Status.Sync.Status == status {
+			res = append(res, app)
+		}
+	}
+	return res
+}
