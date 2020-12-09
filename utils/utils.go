@@ -13,12 +13,6 @@ const (
 	ArgoCDSecretTypeCluster = "cluster"
 )
 
-// RolloutItem is a support structure to use during a Rollout
-type RolloutItem struct {
-	App     *argov1alpha1.Application
-	Requeue bool
-}
-
 func GetSecretListFromSelector(ctx context.Context, c client.Client, selector *metav1.LabelSelector) (*corev1.SecretList, error) {
 	// ArgoCD stores the clusters as Kubernetes secrets
 	clusterSecretList := corev1.SecretList{}
