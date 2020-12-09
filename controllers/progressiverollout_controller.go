@@ -34,6 +34,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/maruina/argocd-progressive-rollout-controller/utils"
+
 	argov1alpha1 "github.com/argoproj/argo-cd/pkg/apis/application/v1alpha1"
 	deploymentv1alpha1 "github.com/maruina/argocd-progressive-rollout-controller/api/v1alpha1"
 )
@@ -78,22 +80,10 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 
 	// Iterate over the rollout stages
 	for i, stage := range pr.Spec.Stages {
-
-		log.V(1).Info("stage started", "stage", i)
+		r.Log.WithValues("stage", i)
 
 		// ArgoCD stores the clusters as Kubernetes secrets
-		clusterSecretList := corev1.SecretList{}
-		// Select based on the spec selector and the ArgoCD labels
-		clusterSelector := metav1.AddLabelToSelector(&stage.Clusters.Selector, ArgoCDSecretTypeLabel, ArgoCDSecretTypeCluster)
-		clusterSecretSelector, err := metav1.LabelSelectorAsSelector(clusterSelector)
-		if err != nil {
-			log.Error(err, "unable to create the clusters selector")
-			return ctrl.Result{}, err
-		}
-		if err = r.List(ctx, &clusterSecretList, client.MatchingLabelsSelector{Selector: clusterSecretSelector}); err != nil {
-			log.Error(err, "unable to list clusters")
-		}
-		log.V(1).Info("found clusters", "total", len(clusterSecretList.Items))
+		clusterSecretList, err := utils.GetSecretFromSelector(ctx, r.Client, &stage.Clusters.Selector)
 
 		/*
 			Ideally we would like to select the Requeue clusters from clusterSecretList.
@@ -102,16 +92,7 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 			If a secret is in both groups, it means it's a cluster we need to requeue
 			TODO: is there a better way?
 		*/
-		requeueSecretList := corev1.SecretList{}
-		requeueSecretSelector, err := metav1.LabelSelectorAsSelector(&stage.Requeue.Selector)
-		if err != nil {
-			log.Error(err, "unable to create the requeue selector")
-			return ctrl.Result{}, err
-		}
-		if err = r.List(ctx, &requeueSecretList, client.MatchingLabelsSelector{Selector: requeueSecretSelector}); err != nil {
-			log.Error(err, "unable to list requeue clusters")
-		}
-		log.V(1).Info("found requeue clusters", "total", len(requeueSecretList.Items))
+		requeueSecretList, err := r.GetSecretFromSelector(ctx, &stage.Requeue.Selector)
 
 		// Get all the Application owned by the spec.sourceRef
 		applicationList := argov1alpha1.ApplicationList{}
@@ -141,21 +122,29 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 			for _, cluster := range clusterSecretList.Items {
 				name := string(cluster.Data["name"])
 				server := string(cluster.Data["server"])
+				log.V(1).Info("matching data", "secret name", name, "secret server", server, "app dest server", app.Spec.Destination.Server)
 				if app.Spec.Destination.Server == server {
 
 					log.V(1).Info("matched application and cluster", "application", app.Name, "cluster", name)
 
 					for _, rq := range requeueSecretList.Items {
 						if rq.Name == cluster.Name {
+							log.V(1).Info("adding cluster to requeue list", "cluster", cluster.Name, "requeue cluster", rq.Name, "application", app.Name)
 							// This cluster matched on spec.clusters.selector AND spec.requeue.selector
 							requeueSelectedApps = append(requeueSelectedApps, RolloutItem{App: &app, Requeue: true})
 						}
 					}
+					selectedApps = append(selectedApps, RolloutItem{App: &app, Requeue: false})
 				}
-				selectedApps = append(selectedApps, RolloutItem{App: &app, Requeue: false})
 			}
 		}
 
+		for _, app := range selectedApps {
+			r.Log.V(1).Info("selectedApps", "app", app.App.Name)
+		}
+		for _, app := range requeueSelectedApps {
+			r.Log.V(1).Info("requeueSelectedApps", "app", app.App.Name)
+		}
 		// Add the Requeue clusters at the end of the list
 		selectedApps = append(selectedApps, requeueSelectedApps...)
 
@@ -174,6 +163,10 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 
 		log.V(1).Info("analyzed applications status", "sync", syncCounter, "progressing", progressingCounter, "outOfSync", len(rolloutApps))
 
+		for _, app := range rolloutApps {
+			log.V(1).Info("rolloutApps", "app", app.App.Name)
+		}
+
 		// Max number of clusters to sync
 		rolloutClusters, err := intstr.GetValueFromIntOrPercent(&stage.MaxClusters, len(rolloutApps), true)
 		// Remove the application that are already in sync.
@@ -188,32 +181,33 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 			// progressingClusters is part of the maxUnavailable quota
 			for i := 0; i < (rolloutUnavailable - progressingCounter); i++ {
 				if rolloutApps[i].Requeue {
-					/*
-						TODO: Add an annotation and requeue after
-					*/
+					// TODO: annotation and retry after
 				} else {
+					log.V(1).Info("executing argocd app sync", "application", rolloutApps[i].App.Name)
 					cmd := exec.Command("argocd", "app", "sync", rolloutApps[i].App.Name, "--async", "--prune")
 					err = cmd.Run()
 					if err != nil {
 						log.Error(err, "error executing argocd cmd")
-						return ctrl.Result{}, err
+						return ctrl.Result{RequeueAfter: 1 * time.Minute}, err
 					}
 					log.V(1).Info("executed argocd app sync", "app", rolloutApps[i].App.Name)
 					// ArgoCD is syncing, requeue after 30s
-					return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+					return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
 				}
 			}
 			/*
 				Protect against the case where we have OutOfSync apps but they are all Progressing
 			*/
-			return ctrl.Result{}, nil
+			log.V(1).Info("Protect against the case where we have OutOfSync apps but they are all Progressing")
+			return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
 		}
 		/*
 			TODO: if we are here it means the Applications are all in sync. We need to check their health as we don't want to progress the Rollout.
 			We still need to requeue the event as we want want to give the opportunity to fix the issue.
 		*/
 	}
-	return ctrl.Result{}, nil
+	log.V(1).Info("complete rollout")
+	return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
 }
 
 func (r *ProgressiveRolloutReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -224,6 +218,23 @@ func (r *ProgressiveRolloutReconciler) SetupWithManager(mgr ctrl.Manager) error 
 			&handler.EnqueueRequestsFromMapFunc{ToRequests: &applicationWatchMapper{r.Client, r.Log}},
 		).
 		Complete(r)
+}
+
+func (r *ProgressiveRolloutReconciler) GetSecretFromSelector(ctx context.Context, selector *metav1.LabelSelector) (*corev1.SecretList, error) {
+	// ArgoCD stores the clusters as Kubernetes secrets
+	clusterSecretList := corev1.SecretList{}
+	// Select based on the spec selector and the ArgoCD label
+	clusterSelector := metav1.AddLabelToSelector(selector, ArgoCDSecretTypeLabel, ArgoCDSecretTypeCluster)
+	clusterSecretSelector, err := metav1.LabelSelectorAsSelector(clusterSelector)
+	if err != nil {
+		r.Log.Error(err, "unable to create the clusters selector")
+		return nil, err
+	}
+	if err = r.List(ctx, &clusterSecretList, client.MatchingLabelsSelector{Selector: clusterSecretSelector}); err != nil {
+		r.Log.Error(err, "unable to list clusters")
+	}
+	r.Log.V(1).Info("found clusters", "total", len(clusterSecretList.Items))
+	return &clusterSecretList, nil
 }
 
 // Map maps an Application event to the matching ProgressiveRollout object
@@ -256,9 +267,7 @@ func (a *applicationWatchMapper) ListMatchingProgressiveRollout(c client.Client,
 	// Check if the Application owner is reference by any ProgressiveRollout
 	for _, pr := range allProgressiveRollout.Items {
 		for _, owner := range app.GetOwnerReferences() {
-			a.Log.V(1).Info("Matching Application with ProgressiveRollout", "Application", app.GetName(), "OwnerReference", owner.String(), "ProgressiveRolloutSourceRef", pr.Spec.SourceRef.String())
 			if pr.Spec.SourceRef.Kind == owner.Kind && pr.Spec.SourceRef.Name == owner.Name && *pr.Spec.SourceRef.APIGroup == owner.APIVersion {
-				a.Log.V(1).Info("Match found", "Application", app.GetName(), "ProgressiveRollout", pr.Name)
 				return &pr, nil
 			}
 		}
