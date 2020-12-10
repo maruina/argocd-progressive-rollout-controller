@@ -9,9 +9,22 @@ spec:
     kind: ApplicationSet
     name: appset-helm-dep
   stages:
+    - name: central-1
+      maxUnavailable: 100%
+      maxClusters: 100%
+      clusters:
+        selector:
+          matchLabels:
+            region: eu-central-1
+      requeue:
+        selector:
+          matchLabels:
+            drained: "true"
+        attempts: 3
+        interval: 5m
     - name: eu-west-1
-      maxUnavailable: 1
-      maxClusters: 1
+      maxUnavailable: 100%
+      maxClusters: 100%
       clusters:
         selector:
           matchLabels:

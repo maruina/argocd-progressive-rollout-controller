@@ -15,19 +15,19 @@ const (
 	ArgoCDSecretTypeCluster = "cluster"
 )
 
-func GetSecretListFromSelector(ctx context.Context, c client.Client, selector *metav1.LabelSelector) (*corev1.SecretList, error) {
+func GetSecretListFromSelector(ctx context.Context, c client.Client, selector *metav1.LabelSelector) (corev1.SecretList, error) {
 	// ArgoCD stores the clusters as Kubernetes secrets
 	clusterSecretList := corev1.SecretList{}
 	// Select based on the spec selector and the ArgoCD label
 	clusterSelector := metav1.AddLabelToSelector(selector, ArgoCDSecretTypeLabel, ArgoCDSecretTypeCluster)
 	clusterSecretSelector, err := metav1.LabelSelectorAsSelector(clusterSelector)
 	if err != nil {
-		return nil, err
+		return clusterSecretList, err
 	}
 	if err = c.List(ctx, &clusterSecretList, client.MatchingLabelsSelector{Selector: clusterSecretSelector}); err != nil {
 	}
 	SortClustersByName(&clusterSecretList)
-	return &clusterSecretList, nil
+	return clusterSecretList, nil
 }
 
 func GetAppsFromOwner(ctx context.Context, c client.Client, owner *corev1.TypedLocalObjectReference) ([]*argov1alpha1.Application, error) {
@@ -72,7 +72,7 @@ func GetAppsBySyncStatus(apps []*argov1alpha1.Application, status argov1alpha1.S
 	return res
 }
 
-func GetCompleteApps(apps []*argov1alpha1.Application) []*argov1alpha1.Application {
+func GetDoneApps(apps []*argov1alpha1.Application) []*argov1alpha1.Application {
 	var res []*argov1alpha1.Application
 	for _, app := range apps {
 		if app.Status.Sync.Status == argov1alpha1.SyncStatusCodeSynced && app.Status.Health.Status != health.HealthStatusProgressing {

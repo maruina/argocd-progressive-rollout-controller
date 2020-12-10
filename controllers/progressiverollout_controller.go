@@ -19,6 +19,7 @@ package controllers
 import (
 	"context"
 	"github.com/argoproj/gitops-engine/pkg/health"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -88,62 +89,87 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 			r.Log.V(1).Info("requeueList", "name", cluster.Name)
 		}
 
-		//TODO: Remove requeueList clusters from clusterList
+		// Remove clusters in requeueList from clusterList
+		// TODO: is there a better way?
+		var stageList corev1.SecretList
+		for _, c := range clusterList.Items {
+			for _, r := range requeueList.Items {
+				if c.Name != r.Name {
+					stageList.Items = append(stageList.Items, c)
+				}
+			}
+		}
+		utils.SortClustersByName(&stageList)
+		for _, cluster := range stageList.Items {
+			r.Log.V(1).Info("stageList", "name", cluster.Name)
+		}
 
 		// Get all the Application owned by the spec.sourceRef
 		ownedApplications, err := utils.GetAppsFromOwner(ctx, r.Client, &pr.Spec.SourceRef)
 
-		// Find Applications targeting clusters in clusterList
-		matchingApps := utils.MatchSecretListWithApps(ownedApplications, clusterList)
+		// Find Applications targeting clusters in stageList
+		stageApps := utils.MatchSecretListWithApps(ownedApplications, &stageList)
 		// Find Applications targeting clusters in requeueList
-		requeueMatchingApps := utils.MatchSecretListWithApps(ownedApplications, requeueList)
-		for _, app := range matchingApps {
-			r.Log.V(1).Info("selectedApps", "name", app.Name)
+		requeueApps := utils.MatchSecretListWithApps(ownedApplications, &requeueList)
+		for _, app := range stageApps {
+			r.Log.V(1).Info("stageApps", "name", app.Name)
 		}
-		for _, app := range requeueMatchingApps {
-			r.Log.V(1).Info("requeueSelectedApps", "name", app.Name)
+		for _, app := range requeueApps {
+			r.Log.V(1).Info("requeueApps", "name", app.Name)
 		}
 
 		// Get OutOfSync Applications so we can update them
-		outOfSyncApps := utils.GetAppsBySyncStatus(matchingApps, argov1alpha1.SyncStatusCodeOutOfSync)
-		for _, app := range outOfSyncApps {
-			r.Log.V(1).Info("outOfSyncApps", "name", app.Name, "health", app.Status.Health.Status, "sync", app.Status.Sync.Status)
+		toDoApps := utils.GetAppsBySyncStatus(stageApps, argov1alpha1.SyncStatusCodeOutOfSync)
+		for _, app := range toDoApps {
+			r.Log.V(1).Info("toDoApps", "name", app.Name, "health", app.Status.Health.Status, "sync", app.Status.Sync.Status)
 		}
 
 		// Get Sync Applications as they count against pr.stage.maxClusters
-		completeApps := utils.GetCompleteApps(matchingApps)
-		for _, app := range completeApps {
-			r.Log.V(1).Info("syncApps", "name", app.Name, "health", app.Status.Health.Status, "sync", app.Status.Sync.Status)
+		doneApps := utils.GetDoneApps(stageApps)
+		for _, app := range doneApps {
+			r.Log.V(1).Info("doneApps", "name", app.Name, "health", app.Status.Health.Status, "sync", app.Status.Sync.Status)
 		}
 
-		progressingApps := utils.GetAppsByHealthStatus(matchingApps, health.HealthStatusProgressing)
-		for _, app := range progressingApps {
-			r.Log.V(1).Info("progressingApps", "name", app.Name, "health", app.Status.Health.Status, "sync", app.Status.Sync.Status)
+		inProgressApps := utils.GetAppsByHealthStatus(stageApps, health.HealthStatusProgressing)
+		for _, app := range inProgressApps {
+			r.Log.V(1).Info("inProgressApps", "name", app.Name, "health", app.Status.Health.Status, "sync", app.Status.Sync.Status)
 		}
 
-		//TODO: Remove progressingApps from outOfSyncApps
+		//TODO: Remove inProgressApps from toDoApps
 
 		// maxClusters converts stage.MaxClusters
-		maxClusters, err := intstr.GetValueFromIntOrPercent(&stage.MaxClusters, len(outOfSyncApps), false)
+		maxClusters, err := intstr.GetValueFromIntOrPercent(&stage.MaxClusters, len(toDoApps), false)
 		// stageMaxClusters is the maximum number of clusters to update before marking the stage as complete
-		// Sync clusters count against the MaxClusters quota
-		stageMaxClusters := maxClusters - len(completeApps)
-		// stageMaxUnavailable is the maximum number of clusters to update
+		// doneApps count against the maxClusters quota
+		stageMaxClusters := maxClusters - len(doneApps)
+		// stageMaxUnavailable is the maximum number of clusters to update in the stage
 		maxUnavailable, err := intstr.GetValueFromIntOrPercent(&stage.MaxUnavailable, stageMaxClusters, false)
-		stageMaxUnavailable := maxUnavailable - len(progressingApps)
+		stageMaxUnavailable := maxUnavailable - len(inProgressApps)
 
 		r.Log.V(1).Info("rollout plan", "maxClusters", maxClusters, "maxUnavailable", maxUnavailable, "stageMaxClusters", stageMaxClusters, "stageMaxUnavailable", stageMaxUnavailable)
 
-		if stageMaxClusters > 0 {
+		if stageMaxClusters > 0 && len(toDoApps) > 0 {
 			for i := 0; i < stageMaxUnavailable; i++ {
-				name := outOfSyncApps[i].Name
+				name := toDoApps[i].Name
 				r.Log.V(1).Info("syncing app", "app", name)
 				if err = r.syncApp(name); err != nil {
 					r.Log.Error(err, "failed to execute argocd command", "app", name)
 				}
 			}
+			return ctrl.Result{}, nil
 		}
-		r.Log.V(1).Info("stage complete", "completeApps", len(completeApps), "outOfSyncApps", len(outOfSyncApps))
+
+		// If we want to update more application than available, we would need a requeue cluster.
+		if stageMaxClusters > 0 && len(requeueApps) > 0 && len(toDoApps) == 0 {
+			for i := 0; i < maxClusters-len(stageApps); i++ {
+				name := requeueApps[i].Name
+				r.Log.V(1).Info("requeue app", "app", name)
+				// TODO: add annotation to keep track of requeue attempts
+			}
+			return ctrl.Result{RequeueAfter: stage.Requeue.Interval.Duration}, nil
+		}
+
+		r.Log.V(1).Info("stage complete", "doneApps", len(doneApps), "toDoApps", len(toDoApps))
 	}
 	r.Log.Info("rollout complete")
 	return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
@@ -156,6 +182,7 @@ func (r *ProgressiveRolloutReconciler) SetupWithManager(mgr ctrl.Manager) error 
 			&source.Kind{Type: &argov1alpha1.Application{}},
 			&handler.EnqueueRequestsFromMapFunc{ToRequests: &applicationWatchMapper{r.Client, r.Log}},
 		).
+		//TODO: Open another watch to the secrets
 		Complete(r)
 }
 
