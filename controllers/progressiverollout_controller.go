@@ -18,9 +18,11 @@ package controllers
 
 import (
 	"context"
+	"github.com/argoproj/gitops-engine/pkg/health"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"os/exec"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
@@ -73,11 +75,20 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 			r.Log.Error(err, "failed to get clusters")
 			return ctrl.Result{}, err
 		}
+		for _, cluster := range clusterList.Items {
+			r.Log.V(1).Info("clusterList", "name", cluster.Name)
+		}
+
 		requeueList, err := utils.GetSecretListFromSelector(ctx, r.Client, &stage.Requeue.Selector)
 		if err != nil {
 			r.Log.Error(err, "failed to get requeue clusters")
 			return ctrl.Result{}, err
 		}
+		for _, cluster := range requeueList.Items {
+			r.Log.V(1).Info("requeueList", "name", cluster.Name)
+		}
+
+		//TODO: Remove requeueList clusters from clusterList
 
 		// Get all the Application owned by the spec.sourceRef
 		ownedApplications, err := utils.GetAppsFromOwner(ctx, r.Client, &pr.Spec.SourceRef)
@@ -96,25 +107,40 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 		// Get OutOfSync Applications so we can update them
 		outOfSyncApps := utils.GetAppsBySyncStatus(matchingApps, argov1alpha1.SyncStatusCodeOutOfSync)
 		for _, app := range outOfSyncApps {
-			r.Log.V(1).Info("outOfSyncApps", "name", app.Name)
+			r.Log.V(1).Info("outOfSyncApps", "name", app.Name, "health", app.Status.Health.Status, "sync", app.Status.Sync.Status)
 		}
 
 		// Get Sync Applications as they count against pr.stage.maxClusters
 		syncApps := utils.GetAppsBySyncStatus(matchingApps, argov1alpha1.SyncStatusCodeSynced)
 		for _, app := range syncApps {
-			r.Log.V(1).Info("syncApps", "name", app.Name)
+			r.Log.V(1).Info("syncApps", "name", app.Name, "health", app.Status.Health.Status, "sync", app.Status.Sync.Status)
 		}
 
-		/*
-			Calculate how many clusters and how many at the same time to update.
-			A Synced cluster counts against maxClusters
-			A Progressing cluster counts against MaxUnavailable
-		*/
-		maxClusters, err := intstr.GetValueFromIntOrPercent(&stage.MaxClusters, len(outOfSyncApps), true)
-		maxClusters = maxClusters - len(syncApps)
-		maxUnavailable, err := intstr.GetValueFromIntOrPercent(&stage.MaxUnavailable, maxClusters, true)
-		r.Log.V(1).Info("rollout plan", "maxClusters", maxClusters, "maxUnavailable", maxUnavailable)
+		progressingApps := utils.GetAppsByHealthStatus(matchingApps, health.HealthStatusProgressing)
+		for _, app := range progressingApps {
+			r.Log.V(1).Info("notHealthyApps", "name", app.Name, "health", app.Status.Health.Status, "sync", app.Status.Sync.Status)
+		}
 
+		//TODO: Remove progressingApps from outOfSyncApps
+
+		// maxClusters converts stage.MaxClusters
+		maxClusters, err := intstr.GetValueFromIntOrPercent(&stage.MaxClusters, len(outOfSyncApps), false)
+		// stageMaxClusters is the maximum number of clusters to update before marking the stage as complete
+		// A Sync or Progressing cluster counts against the MaxClusters quota
+		stageMaxClusters := maxClusters - len(syncApps)
+		// stageMaxUnavailable is the maximum number of clusters to update
+		stageMaxUnavailable, err := intstr.GetValueFromIntOrPercent(&stage.MaxUnavailable, stageMaxClusters, false)
+		r.Log.V(1).Info("rollout plan", "maxClusters", maxClusters, "stageMaxClusters", stageMaxClusters, "stageMaxUnavailable", stageMaxUnavailable)
+
+		if len(outOfSyncApps) > 0 {
+			for i := 0; i < stageMaxUnavailable; i++ {
+				name := outOfSyncApps[i].Name
+				r.Log.V(1).Info("syncing app", "app", name)
+				if err = r.syncApp(name); err != nil {
+					r.Log.Error(err, "failed to execute argocd command", "app", name)
+				}
+			}
+		}
 	}
 	r.Log.Info("reconciliation complete")
 	return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
@@ -130,6 +156,12 @@ func (r *ProgressiveRolloutReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		Complete(r)
 }
 
+func (r *ProgressiveRolloutReconciler) syncApp(app string) error {
+	cmd := exec.Command("argocd", "app", "sync", app, "--async", "--prune")
+	err := cmd.Run()
+	return err
+}
+
 // Map maps an Application event to the matching ProgressiveRollout object
 func (a *applicationWatchMapper) Map(app handler.MapObject) []reconcile.Request {
 	var requests []reconcile.Request
@@ -139,6 +171,7 @@ func (a *applicationWatchMapper) Map(app handler.MapObject) []reconcile.Request 
 		return requests
 	}
 	if pr != nil {
+		a.Log.V(1).Info("application event matched with a progressiverollout", "app", app.Meta.GetName(), "pr", pr.Name)
 		requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{
 			Name:      pr.Name,
 			Namespace: pr.Namespace,

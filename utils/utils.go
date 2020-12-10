@@ -3,9 +3,11 @@ package utils
 import (
 	"context"
 	argov1alpha1 "github.com/argoproj/argo-cd/pkg/apis/application/v1alpha1"
+	"github.com/argoproj/gitops-engine/pkg/health"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sort"
 )
 
 const (
@@ -24,6 +26,7 @@ func GetSecretListFromSelector(ctx context.Context, c client.Client, selector *m
 	}
 	if err = c.List(ctx, &clusterSecretList, client.MatchingLabelsSelector{Selector: clusterSecretSelector}); err != nil {
 	}
+	SortClustersByName(&clusterSecretList)
 	return &clusterSecretList, nil
 }
 
@@ -42,6 +45,7 @@ func GetAppsFromOwner(ctx context.Context, c client.Client, owner *corev1.TypedL
 			}
 		}
 	}
+	SortAppsByName(ownedApplications)
 	return ownedApplications, nil
 }
 
@@ -66,4 +70,32 @@ func GetAppsBySyncStatus(apps []*argov1alpha1.Application, status argov1alpha1.S
 		}
 	}
 	return res
+}
+
+func GetAppsByHealthStatus(apps []*argov1alpha1.Application, h health.HealthStatusCode) []*argov1alpha1.Application {
+	var res []*argov1alpha1.Application
+	for _, app := range apps {
+		if app.Status.Health.Status == h {
+			res = append(res, app)
+		}
+	}
+	return res
+}
+
+func GetAppsByNotHealthStatus(apps []*argov1alpha1.Application, h health.HealthStatusCode) []*argov1alpha1.Application {
+	var res []*argov1alpha1.Application
+	for _, app := range apps {
+		if app.Status.Health.Status != h {
+			res = append(res, app)
+		}
+	}
+	return res
+}
+
+func SortAppsByName(apps []*argov1alpha1.Application) {
+	sort.SliceStable(apps, func(i, j int) bool { return apps[i].Name < apps[j].Name })
+}
+
+func SortClustersByName(clusters *corev1.SecretList) {
+	sort.SliceStable(clusters.Items, func(i, j int) bool { return clusters.Items[i].Name < clusters.Items[j].Name })
 }

@@ -9,13 +9,13 @@ spec:
     kind: ApplicationSet
     name: appset-helm-dep
   stages:
-    - name: eu-west-1a-1
+    - name: eu-west-1
       maxUnavailable: 1
-      maxClusters: 2
+      maxClusters: 1
       clusters:
         selector:
           matchLabels:
-            cluster: eu-west-1a-1
+            region: eu-west-1
       requeue:
         selector:
           matchLabels:
