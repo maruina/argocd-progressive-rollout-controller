@@ -72,6 +72,16 @@ func GetAppsBySyncStatus(apps []*argov1alpha1.Application, status argov1alpha1.S
 	return res
 }
 
+func GetCompleteApps(apps []*argov1alpha1.Application) []*argov1alpha1.Application {
+	var res []*argov1alpha1.Application
+	for _, app := range apps {
+		if app.Status.Sync.Status == argov1alpha1.SyncStatusCodeSynced && app.Status.Health.Status != health.HealthStatusProgressing {
+			res = append(res, app)
+		}
+	}
+	return res
+}
+
 func GetAppsByHealthStatus(apps []*argov1alpha1.Application, h health.HealthStatusCode) []*argov1alpha1.Application {
 	var res []*argov1alpha1.Application
 	for _, app := range apps {

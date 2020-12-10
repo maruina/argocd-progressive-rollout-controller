@@ -111,14 +111,14 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 		}
 
 		// Get Sync Applications as they count against pr.stage.maxClusters
-		syncApps := utils.GetAppsBySyncStatus(matchingApps, argov1alpha1.SyncStatusCodeSynced)
-		for _, app := range syncApps {
+		completeApps := utils.GetCompleteApps(matchingApps)
+		for _, app := range completeApps {
 			r.Log.V(1).Info("syncApps", "name", app.Name, "health", app.Status.Health.Status, "sync", app.Status.Sync.Status)
 		}
 
 		progressingApps := utils.GetAppsByHealthStatus(matchingApps, health.HealthStatusProgressing)
 		for _, app := range progressingApps {
-			r.Log.V(1).Info("notHealthyApps", "name", app.Name, "health", app.Status.Health.Status, "sync", app.Status.Sync.Status)
+			r.Log.V(1).Info("progressingApps", "name", app.Name, "health", app.Status.Health.Status, "sync", app.Status.Sync.Status)
 		}
 
 		//TODO: Remove progressingApps from outOfSyncApps
@@ -126,11 +126,13 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 		// maxClusters converts stage.MaxClusters
 		maxClusters, err := intstr.GetValueFromIntOrPercent(&stage.MaxClusters, len(outOfSyncApps), false)
 		// stageMaxClusters is the maximum number of clusters to update before marking the stage as complete
-		// A Sync or Progressing cluster counts against the MaxClusters quota
-		stageMaxClusters := maxClusters - len(syncApps)
+		// Sync clusters count against the MaxClusters quota
+		stageMaxClusters := maxClusters - len(completeApps)
 		// stageMaxUnavailable is the maximum number of clusters to update
-		stageMaxUnavailable, err := intstr.GetValueFromIntOrPercent(&stage.MaxUnavailable, stageMaxClusters, false)
-		r.Log.V(1).Info("rollout plan", "maxClusters", maxClusters, "stageMaxClusters", stageMaxClusters, "stageMaxUnavailable", stageMaxUnavailable)
+		maxUnavailable, err := intstr.GetValueFromIntOrPercent(&stage.MaxUnavailable, stageMaxClusters, false)
+		stageMaxUnavailable := maxUnavailable - len(progressingApps)
+
+		r.Log.V(1).Info("rollout plan", "maxClusters", maxClusters, "maxUnavailable", maxUnavailable, "stageMaxClusters", stageMaxClusters, "stageMaxUnavailable", stageMaxUnavailable)
 
 		if len(outOfSyncApps) > 0 {
 			for i := 0; i < stageMaxUnavailable; i++ {
@@ -141,8 +143,9 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 				}
 			}
 		}
+		r.Log.V(1).Info("stage complete", "completeApps", len(completeApps), "outOfSyncApps", len(outOfSyncApps))
 	}
-	r.Log.Info("reconciliation complete")
+	r.Log.Info("rollout complete")
 	return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
 }
 
@@ -159,6 +162,13 @@ func (r *ProgressiveRolloutReconciler) SetupWithManager(mgr ctrl.Manager) error 
 func (r *ProgressiveRolloutReconciler) syncApp(app string) error {
 	cmd := exec.Command("argocd", "app", "sync", app, "--async", "--prune")
 	err := cmd.Run()
+	if err != nil {
+		if exitError, ok := err.(*exec.ExitError); ok {
+			if exitError.String() == "exit status 20" {
+				return nil
+			}
+		}
+	}
 	return err
 }
 
