@@ -134,7 +134,7 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 
 		r.Log.V(1).Info("rollout plan", "maxClusters", maxClusters, "maxUnavailable", maxUnavailable, "stageMaxClusters", stageMaxClusters, "stageMaxUnavailable", stageMaxUnavailable)
 
-		if len(outOfSyncApps) > 0 {
+		if stageMaxClusters > 0 {
 			for i := 0; i < stageMaxUnavailable; i++ {
 				name := outOfSyncApps[i].Name
 				r.Log.V(1).Info("syncing app", "app", name)
