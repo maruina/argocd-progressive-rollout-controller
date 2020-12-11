@@ -109,3 +109,10 @@ func SortAppsByName(apps []*argov1alpha1.Application) {
 func SortClustersByName(clusters *corev1.SecretList) {
 	sort.SliceStable(clusters.Items, func(i, j int) bool { return clusters.Items[i].Name < clusters.Items[j].Name })
 }
+
+func Min(x, y int) int {
+	if x < y {
+		return x
+	}
+	return y
+}
