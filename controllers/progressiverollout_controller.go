@@ -72,6 +72,7 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 		r.Log.V(1).Info("stage started", "stage", stage.Name)
 
 		// ArgoCD stores the clusters as Kubernetes secrets
+		// allClusterList is every cluster matching stage.Clusters.Selector, including the ones we want to requeue
 		allClusterList, err := utils.GetSecretListFromSelector(ctx, r.Client, &stage.Clusters.Selector)
 		if err != nil {
 			r.Log.Error(err, "failed to get clusters")
@@ -81,6 +82,7 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 			r.Log.V(1).Info("allClusterList", "name", cluster.Name)
 		}
 
+		// requeueList is every cluster matching stage.Requeue.Selector
 		requeueList, err := utils.GetSecretListFromSelector(ctx, r.Client, &stage.Requeue.Selector)
 		if err != nil {
 			r.Log.Error(err, "failed to get requeue clusters")
@@ -104,20 +106,25 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 			We want to remove clusters in the requeueList from the allClusterList
 			TODO: is there a better way?
 		*/
+		// stageList is every cluster we are updating in the stage
 		var stageList corev1.SecretList
-		for _, c := range allClusterList.Items {
-			for _, r := range requeueList.Items {
-				if c.Name != r.Name {
-					stageList.Items = append(stageList.Items, c)
+		if len(requeueList.Items) > 0 {
+			for _, c := range allClusterList.Items {
+				for _, r := range requeueList.Items {
+					if c.Name != r.Name {
+						stageList.Items = append(stageList.Items, c)
+					}
 				}
 			}
+		} else {
+			stageList.Items = allClusterList.Items
 		}
 		utils.SortClustersByName(&stageList)
 		for _, cluster := range stageList.Items {
 			r.Log.V(1).Info("stageList", "name", cluster.Name)
 		}
 
-		// Get all the Application owned by the spec.sourceRef
+		// ownedApplications has all the Applications owned by the spec.sourceRef
 		ownedApplications, err := utils.GetAppsFromOwner(ctx, r.Client, &pr.Spec.SourceRef)
 
 		// Find Application targeting clusters in allClusterList
@@ -163,7 +170,7 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 		// stageMaxUnavailable is the maximum number of clusters to update in the stage
 		stageMaxUnavailable := utils.Min(maxUnavailable, len(stageApps)) - len(inProgressApps)
 
-		r.Log.V(1).Info("rollout plan", "maxClusters", maxClusters, "maxUnavailable", maxUnavailable, "stageMaxClusters", stageMaxClusters, "stageMaxUnavailable", stageMaxUnavailable, "toDoApps", len(toDoApps), "inProgressApps", len(inProgressApps), "doneApps", len(doneApps))
+		r.Log.V(1).Info("rollout plan", "maxClusters", maxClusters, "maxUnavailable", maxUnavailable, "stageMaxClusters", stageMaxClusters, "stageMaxUnavailable", stageMaxUnavailable, "toDoApps", len(toDoApps), "inProgressApps", len(inProgressApps), "doneApps", len(doneApps), "stageApps", len(stageApps), "requeueApps", len(requeueApps))
 
 		if stageMaxClusters > 0 && len(stageApps) > 0 {
 			for i := 0; i < stageMaxUnavailable; i++ {
