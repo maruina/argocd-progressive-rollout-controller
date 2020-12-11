@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
+	"time"
 
 	"github.com/maruina/argocd-progressive-rollout-controller/utils"
 
@@ -65,17 +66,19 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	r.Log.Info("progressive rollout started", "pr", pr.Name)
+
 	for _, stage := range pr.Spec.Stages {
 		r.Log.V(1).Info("stage started", "stage", stage.Name)
 
 		// ArgoCD stores the clusters as Kubernetes secrets
-		clusterList, err := utils.GetSecretListFromSelector(ctx, r.Client, &stage.Clusters.Selector)
+		allClusterList, err := utils.GetSecretListFromSelector(ctx, r.Client, &stage.Clusters.Selector)
 		if err != nil {
 			r.Log.Error(err, "failed to get clusters")
 			return ctrl.Result{}, err
 		}
-		for _, cluster := range clusterList.Items {
-			r.Log.V(1).Info("clusterList", "name", cluster.Name)
+		for _, cluster := range allClusterList.Items {
+			r.Log.V(1).Info("allClusterList", "name", cluster.Name)
 		}
 
 		requeueList, err := utils.GetSecretListFromSelector(ctx, r.Client, &stage.Requeue.Selector)
@@ -88,7 +91,6 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 		}
 
 		/*
-
 			Consider the following scenario:
 
 			❯ kubectl get secrets -n argocd -l drained="true"
@@ -99,11 +101,11 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 			cluster-eu-west-1a-1-control-plane-4073952145   Opaque   3      2d17h
 			cluster-eu-west-1b-1-control-plane-968703038    Opaque   3      2d17h
 
-			We want to remove clusters in the requeueList from the clusterList
+			We want to remove clusters in the requeueList from the allClusterList
 			TODO: is there a better way?
 		*/
 		var stageList corev1.SecretList
-		for _, c := range clusterList.Items {
+		for _, c := range allClusterList.Items {
 			for _, r := range requeueList.Items {
 				if c.Name != r.Name {
 					stageList.Items = append(stageList.Items, c)
@@ -118,11 +120,13 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 		// Get all the Application owned by the spec.sourceRef
 		ownedApplications, err := utils.GetAppsFromOwner(ctx, r.Client, &pr.Spec.SourceRef)
 
-		// Find Application targeting clusters in clusterList
-		clusterApps := utils.MatchSecretListWithApps(ownedApplications, &clusterList)
+		// Find Application targeting clusters in allClusterList
+		allApps := utils.MatchSecretListWithApps(ownedApplications, &allClusterList)
 		// Find Applications targeting clusters in stageList
+		// We can safely update those Applications
 		stageApps := utils.MatchSecretListWithApps(ownedApplications, &stageList)
 		// Find Applications targeting clusters in requeueList
+		// We need to increment the requeue counter for those Applications
 		requeueApps := utils.MatchSecretListWithApps(ownedApplications, &requeueList)
 		for _, app := range stageApps {
 			r.Log.V(1).Info("stageApps", "name", app.Name)
@@ -132,8 +136,8 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 		}
 
 		// Get OutOfSync Applications so we can update them.
-		// We use clusterApps so we can count requeue clusters as well
-		toDoApps := utils.GetAppsBySyncStatus(clusterApps, argov1alpha1.SyncStatusCodeOutOfSync)
+		// We use allApps so we can count requeue clusters as well
+		toDoApps := utils.GetAppsBySyncStatus(allApps, argov1alpha1.SyncStatusCodeOutOfSync)
 		for _, app := range toDoApps {
 			r.Log.V(1).Info("toDoApps", "name", app.Name, "health", app.Status.Health.Status, "sync", app.Status.Sync.Status)
 		}
@@ -144,15 +148,13 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 			r.Log.V(1).Info("doneApps", "name", app.Name, "health", app.Status.Health.Status, "sync", app.Status.Sync.Status)
 		}
 
-		inProgressApps := utils.GetAppsByHealthStatus(clusterApps, health.HealthStatusProgressing)
+		inProgressApps := utils.GetAppsByHealthStatus(stageApps, health.HealthStatusProgressing)
 		for _, app := range inProgressApps {
 			r.Log.V(1).Info("inProgressApps", "name", app.Name, "health", app.Status.Health.Status, "sync", app.Status.Sync.Status)
 		}
 
-		//TODO: Remove inProgressApps from toDoApps
-
 		// maxClusters converts stage.MaxClusters
-		maxClusters, err := intstr.GetValueFromIntOrPercent(&stage.MaxClusters, len(clusterApps), false)
+		maxClusters, err := intstr.GetValueFromIntOrPercent(&stage.MaxClusters, len(allApps), false)
 		// stageMaxClusters is the maximum number of clusters to update before marking the stage as complete
 		// doneApps count against the maxClusters quota
 		stageMaxClusters := maxClusters - len(doneApps)
@@ -174,13 +176,13 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 		}
 
 		// If we want to update more application than available, we would need a requeue cluster.
-		if stageMaxClusters > 0 && len(requeueApps) > 0 && len(toDoApps)-len(stageApps) > 0 {
+		if stageMaxClusters > 0 && len(requeueApps) > 0 && len(doneApps) == len(toDoApps) {
 			for i := 0; i < maxClusters-len(stageApps); i++ {
 				name := requeueApps[i].Name
 				r.Log.V(1).Info("requeuing app", "app", name)
 				// TODO: add annotation to keep track of requeue attempts
 			}
-			return ctrl.Result{RequeueAfter: stage.Requeue.Interval.Duration}, nil
+			return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
 		}
 
 		r.Log.V(1).Info("stage complete", "stage", stage.Name)
