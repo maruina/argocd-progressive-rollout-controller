@@ -7,9 +7,22 @@ spec:
   sourceRef:
     apiGroup: argoproj.io/v1alpha1
     kind: ApplicationSet
-    name: appset-helm-dep
+    name: myservice
   stages:
-    - name: central-1
+    - name: canary in eu-west-1
+      maxUnavailable: 1
+      maxClusters: 1
+      clusters:
+        selector:
+          matchLabels:
+            region: eu-west-1
+      requeue:
+        selector:
+          matchLabels:
+            drained: "true"
+        attempts: 3
+        interval: 5m
+    - name: eu-central-1
       maxUnavailable: 100%
       maxClusters: 100%
       clusters:
