@@ -18,17 +18,18 @@ package controllers
 
 import (
 	"context"
+	"os/exec"
+	"time"
+
 	"github.com/argoproj/gitops-engine/pkg/health"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"os/exec"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/source"
-	"time"
 
 	"github.com/maruina/argocd-progressive-rollout-controller/components"
 
@@ -203,8 +204,10 @@ func (r *ProgressiveRolloutReconciler) SetupWithManager(mgr ctrl.Manager) error 
 			&source.Kind{Type: &argov1alpha1.Application{}},
 			&handler.EnqueueRequestsFromMapFunc{ToRequests: &applicationWatchMapper{r.Client, r.Log}},
 		).
-		//TODO: Open another watch to the secrets
-		Complete(r)
+		Watches(
+			&source.Kind{Type: &corev1.Secret{}},
+			&handler.EnqueueRequestsFromMapFunc{ToRequests: &secretWatchMapper{r.Client, r.Log}},
+		).Complete(r)
 }
 
 func (r *ProgressiveRolloutReconciler) syncApp(app string) error {
