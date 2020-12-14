@@ -106,7 +106,7 @@ func (s *secretWatchMapper) ListMatchingProgressiveRollout(c client.Client, secr
 			}
 			for _, c := range clusterList.Items {
 				if c.Name == secret.GetName() {
-					s.Log.V(1).Info("secret event matched with a progressiverollout", "secret", secret.GetName(),"selector", "cluster", "pr", pr.Name)
+					s.Log.V(1).Info("secret event matched with a progressiverollout", "secret", secret.GetName(), "selector", "cluster", "pr", pr.Name)
 					return &pr, nil
 				}
 			}
@@ -116,7 +116,7 @@ func (s *secretWatchMapper) ListMatchingProgressiveRollout(c client.Client, secr
 			}
 			for _, c := range requeueList.Items {
 				if c.Name == secret.GetName() {
-					s.Log.V(1).Info("secret event matched with a progressiverollout", "secret", secret.GetName(),"selector", "requeue", "pr", pr.Name)
+					s.Log.V(1).Info("secret event matched with a progressiverollout", "secret", secret.GetName(), "selector", "requeue", "pr", pr.Name)
 					return &pr, nil
 				}
 			}

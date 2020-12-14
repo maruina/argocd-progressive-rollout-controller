@@ -4,15 +4,19 @@ import (
 	"context"
 	argov1alpha1 "github.com/argoproj/argo-cd/pkg/apis/application/v1alpha1"
 	"github.com/argoproj/gitops-engine/pkg/health"
+	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sort"
+	"strconv"
 )
 
 const (
 	ArgoCDSecretTypeLabel   = "argocd.argoproj.io/secret-type"
 	ArgoCDSecretTypeCluster = "cluster"
+	ProgressiveRolloutRequeueAttemptsKey = "aprc.skyscanner.net/attempts"
+
 )
 
 func GetSecretListFromSelector(ctx context.Context, c client.Client, selector *metav1.LabelSelector) (corev1.SecretList, error) {
@@ -116,3 +120,45 @@ func Min(x, y int) int {
 	}
 	return y
 }
+
+func GetRequeueAttempts (ctx context.Context, c client.Client, app *argov1alpha1.Application) (*int, error) {
+	annotations := app.GetAnnotations()
+	if val, ok := annotations[ProgressiveRolloutRequeueAttemptsKey]; ok {
+		iVal, err := strconv.Atoi(val)
+		if err != nil {
+			errors.Wrapf(err, "failed converting requeue attempts", "app", app.Name)
+			return nil, err
+		}
+		return &iVal, nil
+	} else {
+		i := 0
+		return &i, nil
+	}
+}
+
+func IncrementRequeueAttempts(ctx context.Context, c client.Client, app *argov1alpha1.Application) error {
+	attempts, err := GetRequeueAttempts(ctx, c, app)
+	if err != nil {
+		errors.Wrapf(err, "failed to get requeue attempts", "app", app.Name)
+	}
+	*attempts++
+	err = c.Update(ctx, app)
+	if err != nil {
+		errors.Wrapf(err, "failed to update attempts", "app", app.Name, "attempts", attempts)
+	}
+	return nil
+}
+
+/*
+	iVal++
+		annotations[ProgressiveRolloutRequeueAttemptsKey] = strconv.Itoa(iVal)
+		err = c.Update(ctx, app)
+		if err != nil {
+			errors.Wrapf(err, "failed to update annotation", "app", app.Name, "value", strconv.Itoa(iVal))
+			return err
+		}
+	}
+	return nil
+*/
+
+

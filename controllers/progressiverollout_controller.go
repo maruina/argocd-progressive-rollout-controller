@@ -18,14 +18,12 @@ package controllers
 
 import (
 	"context"
-	"os/exec"
-	"time"
-
 	"github.com/argoproj/gitops-engine/pkg/health"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"os/exec"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -177,18 +175,36 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 
 		// If we want to update more application than available, we would need a requeue cluster.
 		if stageMaxClusters > len(toDoApps) && len(requeueApps) > 0 {
+			shouldFail := false
 			for i := 0; i < maxClusters-len(stageApps); i++ {
-				name := requeueApps[i].Name
-				r.Log.Info("requeuing app", "app", name)
-				// TODO: add annotation to keep track of requeue attempts
+				app := requeueApps[i]
+				attempts, err := components.GetRequeueAttempts(ctx, r.Client, app)
+				if err != nil {
+					r.Log.Error(err, "failed to get requeue attempt", "app", app.Name)
+				}
+				
+				if *attempts <= stage.Requeue.Attempts {
+					err = components.IncrementRequeueAttempts(ctx, r.Client, requeueApps[i])
+					if err != nil {
+						r.Log.Error(err, "failed to increment requeue attempt", "app", app.Name)
+					}
+					r.Log.Info("requeuing app", "app", app.Name)
+				} else {
+					r.Log.Info("maximum attempts reached", "attempts", *attempts, "app", app.Name)
+					shouldFail = true
+				}
 			}
-			return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
+			if shouldFail {
+				return ctrl.Result{}, nil
+			}
+			return ctrl.Result{RequeueAfter: stage.Requeue.Interval.Duration}, nil
 		}
 
 		if len(doneApps) < stageMaxClusters || len(inProgressApps) > 0 {
 			r.Log.Info("stage in progress", "stage", stage.Name)
 			return ctrl.Result{}, nil
 		} else {
+			// TODO: remove all annotations
 			r.Log.Info("stage complete", "stage", stage.Name)
 		}
 
@@ -223,6 +239,3 @@ func (r *ProgressiveRolloutReconciler) syncApp(app string) error {
 	return err
 }
 
-func (r *ProgressiveRolloutReconciler) annotateApp(app *argov1alpha1.Application) error {
-	return nil
-}
