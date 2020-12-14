@@ -9,19 +9,6 @@ spec:
     kind: ApplicationSet
     name: myservice
   stages:
-    - name: canary in eu-west-1
-      maxUnavailable: 1
-      maxClusters: 1
-      clusters:
-        selector:
-          matchLabels:
-            region: eu-west-1
-      requeue:
-        selector:
-          matchLabels:
-            drained: "true"
-        attempts: 3
-        interval: 5m
     - name: eu-central-1
       maxUnavailable: 100%
       maxClusters: 100%
@@ -36,8 +23,8 @@ spec:
         attempts: 3
         interval: 5m
     - name: eu-west-1
-      maxUnavailable: 100%
-      maxClusters: 100%
+      maxUnavailable: 1
+      maxClusters: 2
       clusters:
         selector:
           matchLabels:

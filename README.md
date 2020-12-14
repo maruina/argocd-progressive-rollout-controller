@@ -54,3 +54,14 @@ namespace/infrabin created
 namespace/infrabin created
 ❯ kubectl create ns infrabin --context kind-eu-west-1b-1
 namespace/infrabin created
+
+## TODO
+
+- [ ] Add annotation on Requeue clusters and handle failure
+- [ ] Failure handling
+- [ ] Add ProgressiveRollout Status
+- [ ] Finalizer
+- [ ] Tests :(
+- [ ] Break the scheduling logic into a separate component for better testing
+- [ ] Validation: one ApplicationSet can be referenced only by one ProgressiveRollout object
+- [ ] Validation: sane defaults

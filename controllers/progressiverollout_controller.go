@@ -185,7 +185,7 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 			return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
 		}
 
-		if len(doneApps) < stageMaxClusters {
+		if len(doneApps) < stageMaxClusters || len(inProgressApps) > 0 {
 			r.Log.Info("stage in progress", "stage", stage.Name)
 			return ctrl.Result{}, nil
 		} else {

@@ -97,7 +97,7 @@ func (s *secretWatchMapper) ListMatchingProgressiveRollout(c client.Client, secr
 		return nil, err
 	}
 
-	// Check if the Application owner is reference by any ProgressiveRollout
+	// Check if the ProgressiveRollout selector match with the event object
 	for _, pr := range allProgressiveRollout.Items {
 		for _, stage := range pr.Spec.Stages {
 			clusterList, err := components.GetSecretListFromSelector(context.Background(), s.Client, &stage.Clusters.Selector)
@@ -106,6 +106,7 @@ func (s *secretWatchMapper) ListMatchingProgressiveRollout(c client.Client, secr
 			}
 			for _, c := range clusterList.Items {
 				if c.Name == secret.GetName() {
+					s.Log.V(1).Info("secret event matched with a progressiverollout", "secret", secret.GetName(),"selector", "cluster", "pr", pr.Name)
 					return &pr, nil
 				}
 			}
@@ -115,6 +116,7 @@ func (s *secretWatchMapper) ListMatchingProgressiveRollout(c client.Client, secr
 			}
 			for _, c := range requeueList.Items {
 				if c.Name == secret.GetName() {
+					s.Log.V(1).Info("secret event matched with a progressiverollout", "secret", secret.GetName(),"selector", "requeue", "pr", pr.Name)
 					return &pr, nil
 				}
 			}
