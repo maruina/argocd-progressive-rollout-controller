@@ -14,6 +14,7 @@ import (
 const (
 	ArgoCDSecretTypeLabel               = "argocd.argoproj.io/secret-type"
 	ArgoCDSecretTypeCluster             = "cluster"
+	ProgressiveRolloutRequeueTimeKey = "aprc.skyscanner.net/requeued-at"
 	ProgressiveRolloutRequeueAttemptKey = "aprc.skyscanner.net/attempt"
 )
 
@@ -172,5 +173,30 @@ func ClustersHaveSameTopologyKey(clusterA, clusterB *corev1.Secret, topologyKey 
 		return clusterALabel == clusterBLabel
 	}
 
+	return false
+}
+
+func HasRequeueAtAnnotation(app *argov1alpha1.Application) bool {
+	return hasAnnotation(ProgressiveRolloutRequeueTimeKey, app)
+}
+
+func HasRequeueAttemptsAnnotation(app *argov1alpha1.Application) bool {
+	return hasAnnotation(ProgressiveRolloutRequeueAttemptKey, app)
+}
+
+func hasAnnotations(app *argov1alpha1.Application) bool {
+	if app.Annotations == nil {
+		return false
+	}
+	return true
+}
+
+func hasAnnotation(key string, app *argov1alpha1.Application) bool {
+	if !hasAnnotations(app) {
+		return false
+	}
+	if _, ok := app.Annotations[key]; ok {
+		return true
+	}
 	return false
 }

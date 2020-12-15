@@ -18,10 +18,14 @@ package controllers
 
 import (
 	"context"
+	"errors"
+	argov1alpha1 "github.com/argoproj/argo-cd/pkg/apis/application/v1alpha1"
 	"github.com/argoproj/gitops-engine/pkg/health"
 	"github.com/go-logr/logr"
+	deploymentv1alpha1 "github.com/maruina/argocd-progressive-rollout-controller/api/v1alpha1"
 	"github.com/maruina/argocd-progressive-rollout-controller/components"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"os/exec"
@@ -29,9 +33,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/source"
+	"strconv"
+	"time"
+)
 
-	argov1alpha1 "github.com/argoproj/argo-cd/pkg/apis/application/v1alpha1"
-	deploymentv1alpha1 "github.com/maruina/argocd-progressive-rollout-controller/api/v1alpha1"
+const (
+	ProgressiveRolloutRequeuedAtKey = "aprc.skyscanner.net/requeued-at"
+	ProgressiveRolloutAttemptsKey   = "aprc.skyscanner.net/attempt"
 )
 
 // ProgressiveRolloutReconciler reconciles a ProgressiveRollout object
@@ -218,5 +226,48 @@ func (r *ProgressiveRolloutReconciler) syncApp(app string) error {
 			}
 		}
 	}
+	return err
+}
+
+func (r *ProgressiveRolloutReconciler) annotateApp (ctx context.Context, interval *metav1.Duration, maxAttempts int, app *argov1alpha1.Application) error {
+
+	rawTime := time.Now()
+
+	// Set defaults if there are no annotations
+	if app.Annotations == nil {
+		app.Annotations = map[string]string{
+			ProgressiveRolloutRequeuedAtKey: rawTime.Format(time.RFC3339),
+			ProgressiveRolloutAttemptsKey:   "1",
+		}
+	}
+
+	attemptsRaw := app.Annotations[ProgressiveRolloutAttemptsKey]
+	if len(attemptsRaw) == 0 {
+		app.Annotations[ProgressiveRolloutAttemptsKey] = "1"
+	}
+	lastRequeuedAtRaw := app.Annotations[ProgressiveRolloutRequeuedAtKey]
+	if len(lastRequeuedAtRaw) == 0 {
+		app.Annotations[ProgressiveRolloutRequeuedAtKey] = rawTime.Format(time.RFC3339)
+	}
+
+	lastRequeuedAt, err := time.Parse(time.RFC3339, lastRequeuedAtRaw)
+	if err != nil {
+		app.Annotations[ProgressiveRolloutRequeuedAtKey] = rawTime.Format(time.RFC3339)
+	}
+	attempts, err := strconv.Atoi(attemptsRaw)
+	if err != nil {
+		app.Annotations[ProgressiveRolloutAttemptsKey] = "1"
+	}
+
+
+	if lastRequeuedAt.Add(interval.Duration).After(time.Now()) {
+		if attempts > maxAttempts {
+			err := errors.New("max attempts reached")
+			return err
+		}
+		app.Annotations[ProgressiveRolloutAttemptsKey] = strconv.Itoa(attempts+1)
+		app.Annotations[ProgressiveRolloutRequeuedAtKey] = time.Now().Format(time.RFC3339)
+	}
+	err = r.Client.Update(ctx, app)
 	return err
 }
