@@ -20,8 +20,8 @@ spec:
         selector:
           matchLabels:
             drained: "true"
-        attempts: 3
-        interval: 5m
+        attempts: 6
+        interval: 10s
     - name: eu-west-1
       maxUnavailable: 1
       maxClusters: 2
@@ -33,5 +33,5 @@ spec:
         selector:
           matchLabels:
             drained: "true"
-        attempts: 3
-        interval: 5m
+        attempts: 6
+        interval: 10s

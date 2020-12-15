@@ -57,6 +57,8 @@ namespace/infrabin created
 
 ## TODO
 
+- [ ] Add topologyKey
+- [ ] Add Progressdeadline
 - [ ] Add annotation on Requeue clusters and handle failure
 - [ ] Failure handling
 - [ ] Add ProgressiveRollout Status

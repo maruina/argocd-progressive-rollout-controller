@@ -4,7 +4,6 @@ import (
 	"context"
 	argov1alpha1 "github.com/argoproj/argo-cd/pkg/apis/application/v1alpha1"
 	"github.com/argoproj/gitops-engine/pkg/health"
-	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -13,10 +12,9 @@ import (
 )
 
 const (
-	ArgoCDSecretTypeLabel   = "argocd.argoproj.io/secret-type"
-	ArgoCDSecretTypeCluster = "cluster"
-	ProgressiveRolloutRequeueAttemptsKey = "aprc.skyscanner.net/attempts"
-
+	ArgoCDSecretTypeLabel               = "argocd.argoproj.io/secret-type"
+	ArgoCDSecretTypeCluster             = "cluster"
+	ProgressiveRolloutRequeueAttemptKey = "aprc.skyscanner.net/attempt"
 )
 
 func GetSecretListFromSelector(ctx context.Context, c client.Client, selector *metav1.LabelSelector) (corev1.SecretList, error) {
@@ -33,9 +31,7 @@ func GetSecretListFromSelector(ctx context.Context, c client.Client, selector *m
 	SortClustersByName(&clusterSecretList)
 	return clusterSecretList, nil
 }
-
 func GetAppsFromOwner(ctx context.Context, c client.Client, owner *corev1.TypedLocalObjectReference) ([]*argov1alpha1.Application, error) {
-
 	applicationList := argov1alpha1.ApplicationList{}
 	var ownedApplications []*argov1alpha1.Application
 	err := c.List(ctx, &applicationList)
@@ -52,7 +48,6 @@ func GetAppsFromOwner(ctx context.Context, c client.Client, owner *corev1.TypedL
 	SortAppsByName(ownedApplications)
 	return ownedApplications, nil
 }
-
 func MatchSecretListWithApps(apps []*argov1alpha1.Application, list *corev1.SecretList) []*argov1alpha1.Application {
 	var match []*argov1alpha1.Application
 	for _, app := range apps {
@@ -65,7 +60,6 @@ func MatchSecretListWithApps(apps []*argov1alpha1.Application, list *corev1.Secr
 	}
 	return match
 }
-
 func GetAppsBySyncStatus(apps []*argov1alpha1.Application, status argov1alpha1.SyncStatusCode) []*argov1alpha1.Application {
 	var res []*argov1alpha1.Application
 	for _, app := range apps {
@@ -75,7 +69,6 @@ func GetAppsBySyncStatus(apps []*argov1alpha1.Application, status argov1alpha1.S
 	}
 	return res
 }
-
 func GetDoneApps(apps []*argov1alpha1.Application) []*argov1alpha1.Application {
 	var res []*argov1alpha1.Application
 	for _, app := range apps {
@@ -85,7 +78,6 @@ func GetDoneApps(apps []*argov1alpha1.Application) []*argov1alpha1.Application {
 	}
 	return res
 }
-
 func GetAppsByHealthStatus(apps []*argov1alpha1.Application, h health.HealthStatusCode) []*argov1alpha1.Application {
 	var res []*argov1alpha1.Application
 	for _, app := range apps {
@@ -95,7 +87,6 @@ func GetAppsByHealthStatus(apps []*argov1alpha1.Application, h health.HealthStat
 	}
 	return res
 }
-
 func GetAppsByNotHealthStatus(apps []*argov1alpha1.Application, h health.HealthStatusCode) []*argov1alpha1.Application {
 	var res []*argov1alpha1.Application
 	for _, app := range apps {
@@ -106,14 +97,17 @@ func GetAppsByNotHealthStatus(apps []*argov1alpha1.Application, h health.HealthS
 	return res
 }
 
+//SortAppsByName sort a list of applications in alphabetical order
 func SortAppsByName(apps []*argov1alpha1.Application) {
 	sort.SliceStable(apps, func(i, j int) bool { return apps[i].Name < apps[j].Name })
 }
 
+//SortClustersByName sort a list of cluster in alphabetical order
 func SortClustersByName(clusters *corev1.SecretList) {
 	sort.SliceStable(clusters.Items, func(i, j int) bool { return clusters.Items[i].Name < clusters.Items[j].Name })
 }
 
+//Min returns the minimum between two integers
 func Min(x, y int) int {
 	if x < y {
 		return x
@@ -121,44 +115,62 @@ func Min(x, y int) int {
 	return y
 }
 
-func GetRequeueAttempts (ctx context.Context, c client.Client, app *argov1alpha1.Application) (*int, error) {
-	annotations := app.GetAnnotations()
-	if val, ok := annotations[ProgressiveRolloutRequeueAttemptsKey]; ok {
-		iVal, err := strconv.Atoi(val)
-		if err != nil {
-			errors.Wrapf(err, "failed converting requeue attempts", "app", app.Name)
-			return nil, err
-		}
-		return &iVal, nil
-	} else {
-		i := 0
-		return &i, nil
-	}
-}
-
-func IncrementRequeueAttempts(ctx context.Context, c client.Client, app *argov1alpha1.Application) error {
-	attempts, err := GetRequeueAttempts(ctx, c, app)
+//IncrementRequeueAnnotation increment by one the requeue annotation key
+func IncrementRequeueAnnotation(ctx context.Context, c client.Client, app *argov1alpha1.Application) error {
+	val, err := GetRequeueAnnotation(ctx, c, app)
 	if err != nil {
-		errors.Wrapf(err, "failed to get requeue attempts", "app", app.Name)
+		return err
 	}
-	*attempts++
+	app.Annotations[ProgressiveRolloutRequeueAttemptKey] = strconv.Itoa(val + 1)
 	err = c.Update(ctx, app)
-	if err != nil {
-		errors.Wrapf(err, "failed to update attempts", "app", app.Name, "attempts", attempts)
-	}
-	return nil
+	return err
 }
 
-/*
-	iVal++
-		annotations[ProgressiveRolloutRequeueAttemptsKey] = strconv.Itoa(iVal)
-		err = c.Update(ctx, app)
-		if err != nil {
-			errors.Wrapf(err, "failed to update annotation", "app", app.Name, "value", strconv.Itoa(iVal))
-			return err
+//initRequeueAnnotation create the requeue annotations if missing
+func initRequeueAnnotation(ctx context.Context, c client.Client, app *argov1alpha1.Application) error {
+	if app.Annotations == nil {
+		app.Annotations = map[string]string{
+			ProgressiveRolloutRequeueAttemptKey: "0",
 		}
 	}
-	return nil
-*/
+	if val, ok := app.Annotations[ProgressiveRolloutRequeueAttemptKey]; ok {
+		_, err := strconv.Atoi(val)
+		if err != nil {
+			app.Annotations[ProgressiveRolloutRequeueAttemptKey] = "0"
+		}
+	} else {
+		app.Annotations[ProgressiveRolloutRequeueAttemptKey] = "0"
+	}
+	err := c.Update(ctx, app)
+	return err
+}
 
+//GetRequeueAnnotation returns the requeue annotation key value
+func GetRequeueAnnotation(ctx context.Context, c client.Client, app *argov1alpha1.Application) (int, error) {
+	err := initRequeueAnnotation(ctx, c, app)
+	if err != nil {
+		return 0, err
+	}
+	val, err := strconv.Atoi(app.Annotations[ProgressiveRolloutRequeueAttemptKey])
+	return val, err
+}
 
+func ClustersHaveSameTopologyKey(clusterA, clusterB *corev1.Secret, topologyKey string) bool {
+	if len(topologyKey) == 0 {
+		return false
+	}
+
+	if clusterA.Labels == nil || clusterB.Labels == nil {
+		return false
+	}
+
+	clusterALabel, okA := clusterA.Labels[topologyKey]
+	clusterBLabel, okB := clusterB.Labels[topologyKey]
+
+	// If found label in both nodes, check the label
+	if okB && okA {
+		return clusterALabel == clusterBLabel
+	}
+
+	return false
+}

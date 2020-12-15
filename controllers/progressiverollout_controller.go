@@ -20,6 +20,7 @@ import (
 	"context"
 	"github.com/argoproj/gitops-engine/pkg/health"
 	"github.com/go-logr/logr"
+	"github.com/maruina/argocd-progressive-rollout-controller/components"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -28,8 +29,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/source"
-
-	"github.com/maruina/argocd-progressive-rollout-controller/components"
 
 	argov1alpha1 "github.com/argoproj/argo-cd/pkg/apis/application/v1alpha1"
 	deploymentv1alpha1 "github.com/maruina/argocd-progressive-rollout-controller/api/v1alpha1"
@@ -175,27 +174,10 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 
 		// If we want to update more application than available, we would need a requeue cluster.
 		if stageMaxClusters > len(toDoApps) && len(requeueApps) > 0 {
-			shouldFail := false
 			for i := 0; i < maxClusters-len(stageApps); i++ {
-				app := requeueApps[i]
-				attempts, err := components.GetRequeueAttempts(ctx, r.Client, app)
-				if err != nil {
-					r.Log.Error(err, "failed to get requeue attempt", "app", app.Name)
-				}
-				
-				if *attempts <= stage.Requeue.Attempts {
-					err = components.IncrementRequeueAttempts(ctx, r.Client, requeueApps[i])
-					if err != nil {
-						r.Log.Error(err, "failed to increment requeue attempt", "app", app.Name)
-					}
-					r.Log.Info("requeuing app", "app", app.Name)
-				} else {
-					r.Log.Info("maximum attempts reached", "attempts", *attempts, "app", app.Name)
-					shouldFail = true
-				}
-			}
-			if shouldFail {
-				return ctrl.Result{}, nil
+				name := requeueApps[i].Name
+				r.Log.Info("requeuing app", "app", name)
+				// TODO: add annotation to keep track of requeue attempts
 			}
 			return ctrl.Result{RequeueAfter: stage.Requeue.Interval.Duration}, nil
 		}
@@ -238,4 +220,3 @@ func (r *ProgressiveRolloutReconciler) syncApp(app string) error {
 	}
 	return err
 }
-
