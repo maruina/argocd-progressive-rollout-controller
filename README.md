@@ -1,19 +1,89 @@
 # argocd-progressive-rollout-controller
-Progressive Rollout controller for ArgoCD ApplicationSet
+Progressive Rollout controller for ArgoCD ApplicationSet.
+
+**Status: ALPHA (actively looking for feedback)**
+
+## Why
+[ApplicationSet](https://github.com/argoproj-labs/applicationset) is being developed as the solution to replace the `app-of-apps` pattern.
+
+While ApplicationSet is great to programmatically generate Applications, you will still need to solve _how_ to update the Applications. 
+
+If you enable the [auto-sync](https://argoproj.github.io/argo-cd/user-guide/auto_sync/) policy, that will update _all_ your generated Application at the same time.
+
+This might not be a problem if you have only one production cluster, but organizations with tens or hundreds or production cluster need to avoid a global rollout and to release a new version in a safer way.
+
+The `argocd-progressive-rollout-operator` solves this problem by allowing operators to decide _how_ they want to update their Applications.
+
+## Concepts
+
+- Watch for Applications and Secrets events, using a source reference to track ownership.
+- Use label selectors to retrieve the cluster list.
+- A cluster can be requeued. This mean the operator will try to update it at the end of the stage. This is useful if you want to temporary bring a cluster offline for maintenance without having to freeze the deployments.
+- _(TODO)_ Topology key to allow grouping clusters. For example, you might want to update few clusters, but only one per region.
+- _(TODO)_ Bake time to allow a deployment to soak for a certain amount of time before moving to the next stage.
+- _(TODO)_ Webhooks to call specific endpoints during the stage. This can be useful to trigger load or smoke tests.
+- _(TODO)_ Metric checks.
+
+## Example Spec
+
+In the following example we are going to update all the clusters deployed in two regions, targeting 25% of the clusters at the time.
+
+If a cluster - the secret object - has the label `drained="true"`, it will be requeued.
+
+```yaml
+apiVersion: deployment.skyscanner.net/v1alpha1
+kind: ProgressiveRollout
+metadata:
+  name: progressiverollout-sample
+  namespace: argocd
+spec:
+  sourceRef:
+    apiGroup: argoproj.io/v1alpha1
+    kind: ApplicationSet
+    name: my-app-set
+  stages:
+    - name: eu-central-1
+      maxUnavailable: 25%
+      maxClusters: 100%
+      clusters:
+        selector:
+          matchLabels:
+            region: eu-central-1
+      requeue:
+        selector:
+          matchLabels:
+            drained: "true"
+        attempts: 5
+        interval: 30m
+    - name: eu-west-1
+      maxUnavailable: 25%
+      maxClusters: 100%
+      clusters:
+        selector:
+          matchLabels:
+            region: eu-west-1
+      requeue:
+        selector:
+          matchLabels:
+            drained: "true"
+        attempts: 5
+        interval: 30m
+```
 
 ## Development
 
-In order to start developing the progressive rollout controller, you need to:
+In order to start developing the progressive rollout controller, you need to have a local installation of [kubebuilder](https://book.kubebuilder.io/quick-start.html#installation).
+
+## Testing locally with kind
 
 - Install kind: <https://kind.sigs.k8s.io/docs/user/quick-start/#installation>
-- Install kubebuilder: <https://book.kubebuilder.io/quick-start.html#installation>
-- Create a kind cluster named `control`
+- Create the kind clusters. You need at least one control cluster and one target cluster.
 
 ```console
 kind create cluster --name eu-west-1a-1
 kind create cluster --name eu-west-1a-2
 kind create cluster --name eu-central-1a-1
-kind create cluster
+kind create cluster # this is the control cluster for argocd
 ```
 
 - Install ArgoCD
@@ -32,33 +102,63 @@ cd $GOPATH/src/github.com/argoproj-labs/applicationset
 IMAGE="maruina/argocd-applicationset:v0.1.0" make deploy
 ```
 
-❯ kubectl exec -it -n argocd argocd-server-6987c9748c-6x27q -- argocd login argocd-server.argocd.svc.cluster.local:443
-❯ kind get kubeconfig --name eu-west-1a-1 --internal | pbcopy
+- Install the ArgoCD CLI: <https://argoproj.github.io/argo-cd/getting_started/#2-download-argo-cd-cli>
 
+- Register the target clusters in Argo CD. Please note that you need to use the internal address that will not work from your CLI. The solution is to exec into the `argocd-server` pod and to run the commands from there
+
+```console
+kubectl exec -it -n argocd argocd-server-6987c9748c-6x27q -- argocd login argocd-server.argocd.svc.cluster.local:443
+
+# From another shell
+kind get kubeconfig --name eu-west-1a-1 --internal | pbcopy
+
+# Back into the argocd-server pod
 cat >eu-west-1a-1 <<EOF
 <PASTE>
 EOF
 
-argocd@argocd-server-6987c9748c-p4qxs:~$ argocd cluster add kind-eu-central-1a-1 --kubeconfig eu-central-1a-1
+argocd cluster add kind-eu-west-1a-1 --kubeconfig eu-west-1a-1
+```
 
-❯ kubectl label secrets -n argocd cluster-eu-central-1a-1-control-plane-3371478133 cluster=eu-central-1a-1 region=eu-central-1 --overwrite
-secret/cluster-eu-central-1a-1-control-plane-3371478133 labeled
-❯ kubectl label secrets -n argocd cluster-eu-west-1a-1-control-plane-4073952145 cluster=eu-west-1a-1 region=eu-west-1 --overwrite
-secret/cluster-eu-west-1a-1-control-plane-4073952145 labeled
-❯ kubectl label secrets -n argocd cluster-eu-west-1b-1-control-plane-968703038 cluster=eu-west-1b-1 region=eu-west-1 --overwrite
-secret/cluster-eu-west-1b-1-control-plane-968703038 labeled
+- Create the `infrabin` namespace in every target cluster
 
-❯ kubectl create ns infrabin --context kind-eu-west-1a-1
-namespace/infrabin created
-❯ kubectl create ns infrabin --context kind-eu-central-1a-1
-namespace/infrabin created
-❯ kubectl create ns infrabin --context kind-eu-west-1b-1
-namespace/infrabin created
+```console
+kubectl create ns infrabin --context kind-eu-west-1a-1
+
+kubectl create ns infrabin --context kind-eu-central-1a-1
+
+kubectl create ns infrabin --context kind-eu-west-1b-1
+```
+
+- Create a sample `applicationset`. You can use [config/samples/appset-goinfra.yaml](./config/samples/appset-goinfra.yaml).
+
+- Install the CRDs into the control cluster
+
+```console
+make install
+```
+
+- Create a sample `progressiverollout`.  You can use [config/samples/deployment_v1alpha1_progressiverollout.yaml](./config/samples/deployment_v1alpha1_progressiverollout.yaml).
+
+- Port-forward to the `argocd-server` service and login.
+
+```console
+kubectl port-forward -n argocd svc/argocd-server 8080:443
+
+# From another shell
+argocd login localhost:8080
+```
+
+- Run the operator
+
+```console
+make run
+```
 
 ## TODO
 
-- [ ] Add topologyKey
-- [ ] Add Progressdeadline
+- [ ] Add topologyKey for grouping clusters with the same selector
+- [ ] Add Progressdeadline to allow detecting a stuck deployment
 - [ ] Add annotation on Requeue clusters and handle failure
 - [ ] Failure handling
 - [ ] Add ProgressiveRollout Status
@@ -67,3 +167,4 @@ namespace/infrabin created
 - [ ] Break the scheduling logic into a separate component for better testing
 - [ ] Validation: one ApplicationSet can be referenced only by one ProgressiveRollout object
 - [ ] Validation: sane defaults
+- [ ] Support Argo CD Projects
