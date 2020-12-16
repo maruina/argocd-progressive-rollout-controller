@@ -39,7 +39,7 @@ import (
 
 const (
 	ProgressiveRolloutRequeuedAtKey = "aprc.skyscanner.net/requeued-at"
-	ProgressiveRolloutAttemptsKey   = "aprc.skyscanner.net/attempt"
+	ProgressiveRolloutAttemptsKey   = "aprc.skyscanner.net/attempts"
 )
 
 // ProgressiveRolloutReconciler reconciles a ProgressiveRollout object
@@ -183,9 +183,12 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 		// If we want to update more application than available, we would need a requeue cluster.
 		if stageMaxClusters > len(toDoApps) && len(requeueApps) > 0 {
 			for i := 0; i < maxClusters-len(stageApps); i++ {
-				name := requeueApps[i].Name
-				r.Log.Info("requeuing app", "app", name)
-				// TODO: add annotation to keep track of requeue attempts
+				app := requeueApps[i]
+				r.Log.Info("requeuing app", "app", app.Name)
+				err = r.annotateApp(ctx, &stage.Requeue.Interval, stage.Requeue.Attempts, app)
+				if err != nil {
+					return ctrl.Result{}, err
+				}
 			}
 			return ctrl.Result{RequeueAfter: stage.Requeue.Interval.Duration}, nil
 		}
@@ -229,12 +232,13 @@ func (r *ProgressiveRolloutReconciler) syncApp(app string) error {
 	return err
 }
 
-func (r *ProgressiveRolloutReconciler) annotateApp (ctx context.Context, interval *metav1.Duration, maxAttempts int, app *argov1alpha1.Application) error {
+func (r *ProgressiveRolloutReconciler) annotateApp(ctx context.Context, interval *metav1.Duration, maxAttempts int, app *argov1alpha1.Application) error {
 
 	rawTime := time.Now()
 
 	// Set defaults if there are no annotations
 	if app.Annotations == nil {
+		r.Log.V(1).Info("annotations missing", "app", app.Name)
 		app.Annotations = map[string]string{
 			ProgressiveRolloutRequeuedAtKey: rawTime.Format(time.RFC3339),
 			ProgressiveRolloutAttemptsKey:   "1",
@@ -243,10 +247,12 @@ func (r *ProgressiveRolloutReconciler) annotateApp (ctx context.Context, interva
 
 	attemptsRaw := app.Annotations[ProgressiveRolloutAttemptsKey]
 	if len(attemptsRaw) == 0 {
+		r.Log.V(1).Info("got annotations but attempts is missing", "app", app.Name)
 		app.Annotations[ProgressiveRolloutAttemptsKey] = "1"
 	}
 	lastRequeuedAtRaw := app.Annotations[ProgressiveRolloutRequeuedAtKey]
 	if len(lastRequeuedAtRaw) == 0 {
+		r.Log.V(1).Info("got annotations but requeued-at is missing", "app", app.Name)
 		app.Annotations[ProgressiveRolloutRequeuedAtKey] = rawTime.Format(time.RFC3339)
 	}
 
@@ -259,14 +265,20 @@ func (r *ProgressiveRolloutReconciler) annotateApp (ctx context.Context, interva
 		app.Annotations[ProgressiveRolloutAttemptsKey] = "1"
 	}
 
+	r.Log.V(1).Info("found existing annotations", "app", app.Name, "annotations", app.Annotations)
+	r.Log.V(1).Info("time computation", "lastRequeuedAt+interval", lastRequeuedAt.Add(interval.Duration).Format(time.RFC3339), "now", time.Now().Format(time.RFC3339))
 
-	if lastRequeuedAt.Add(interval.Duration).After(time.Now()) {
+	if lastRequeuedAt.Add(interval.Duration).Before(time.Now()) {
+		r.Log.V(1).Info("cluster should be requeued", "app", app.Name)
+		r.Log.V(1).Info("attempts computation", "app", app.Name, "attempts", attempts)
 		if attempts > maxAttempts {
+			r.Log.V(1).Info("max attempts reached", "app", app.Name, "attempts", attempts)
 			err := errors.New("max attempts reached")
 			return err
 		}
-		app.Annotations[ProgressiveRolloutAttemptsKey] = strconv.Itoa(attempts+1)
+		app.Annotations[ProgressiveRolloutAttemptsKey] = strconv.Itoa(attempts + 1)
 		app.Annotations[ProgressiveRolloutRequeuedAtKey] = time.Now().Format(time.RFC3339)
+		r.Log.V(1).Info("annotations updated", "app", app.Name, "annotations", app.Annotations)
 	}
 	err = r.Client.Update(ctx, app)
 	return err

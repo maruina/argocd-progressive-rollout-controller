@@ -14,7 +14,7 @@ import (
 const (
 	ArgoCDSecretTypeLabel               = "argocd.argoproj.io/secret-type"
 	ArgoCDSecretTypeCluster             = "cluster"
-	ProgressiveRolloutRequeueTimeKey = "aprc.skyscanner.net/requeued-at"
+	ProgressiveRolloutRequeueTimeKey    = "aprc.skyscanner.net/requeued-at"
 	ProgressiveRolloutRequeueAttemptKey = "aprc.skyscanner.net/attempt"
 )
 
