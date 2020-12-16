@@ -1,0 +1,35 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: appset-goinfra
+  namespace: argocd
+spec:
+  generators:
+  - list:
+      elements:
+        - cluster: eu-west-1a-1
+          url: "https://eu-west-1a-1-control-plane:6443"
+        - cluster: eu-west-1b-1
+          url: "https://eu-west-1b-1-control-plane:6443"
+        - cluster: eu-central-1a-1
+          url: "https://eu-central-1a-1-control-plane:6443"
+  template:
+    metadata:
+      name: 'goinfra-{{cluster}}'
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/maruina/appset-poc.git
+        targetRevision: HEAD
+        path: goinfra
+        helm:
+          releaseName: goinfra
+          valueFiles:
+            - "values.yaml"
+            - "values-{{cluster}}.yaml"
+          parameters:
+            - name: go-infrabin.podAnnotations.gitsha
+              value: ${ARGOCD_APP_REVISION}
+      destination:
+        server: '{{url}}'
+        namespace: infrabin
