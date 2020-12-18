@@ -57,6 +57,8 @@ type ProgressiveRolloutStage struct {
 type Cluster struct {
 	//Selector is a label selector to get the clusters for the update
 	Selector metav1.LabelSelector `json:"selector"`
+	//TopologyKey is a string to group the clusters by a topology domain.
+	TopologyKey string `json:"topologyKey,omitempty"`
 }
 
 //Requeue defines when to requeue a cluster before updating it

@@ -32,6 +32,16 @@ func GetSecretListFromSelector(ctx context.Context, c client.Client, selector *m
 	SortClustersByName(&clusterSecretList)
 	return clusterSecretList, nil
 }
+
+func GetSecretListFromSelectorWithTopology(ctx context.Context, c client.Client, selector *metav1.LabelSelector, topology string) (corev1.SecretList, error) {
+	clusterSecretList, err := GetSecretListFromSelector(ctx, c, selector)
+	if err != nil {
+		return clusterSecretList, err
+	}
+	clusterSecretList = SortClustersByTopologyKey(topology, &clusterSecretList)
+	return clusterSecretList, nil
+}
+
 func GetAppsFromOwner(ctx context.Context, c client.Client, owner *corev1.TypedLocalObjectReference) ([]*argov1alpha1.Application, error) {
 	applicationList := argov1alpha1.ApplicationList{}
 	var ownedApplications []*argov1alpha1.Application
@@ -106,6 +116,37 @@ func SortAppsByName(apps []*argov1alpha1.Application) {
 //SortClustersByName sort a list of cluster in alphabetical order
 func SortClustersByName(clusters *corev1.SecretList) {
 	sort.SliceStable(clusters.Items, func(i, j int) bool { return clusters.Items[i].Name < clusters.Items[j].Name })
+}
+
+func SortClustersByTopologyKey(key string, clusters *corev1.SecretList) corev1.SecretList {
+	var output corev1.SecretList
+	// First sort input by name
+	SortClustersByName(clusters)
+	topologyMap := make(map[string][]corev1.Secret)
+	for _, c := range clusters.Items {
+		if val, ok := c.Labels[key]; ok {
+			topologyMap[val] = append(topologyMap[val], c)
+		}
+	}
+
+	// Get the most frequent topology key
+	var maxLen int
+	for _, v := range topologyMap {
+		if len(v) >= maxLen {
+			maxLen = len(v)
+		}
+	}
+
+	for i := 0; i < maxLen; i++ {
+		for _, v := range topologyMap {
+			if len(v) > 0 {
+				output.Items = append(output.Items, v[i])
+				// Remove the element from the array
+				v = append(v[:i], v[i+1:]...)
+			}
+		}
+	}
+	return output
 }
 
 //Min returns the minimum between two integers

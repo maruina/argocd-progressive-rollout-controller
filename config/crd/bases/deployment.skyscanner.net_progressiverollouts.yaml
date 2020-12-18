@@ -107,6 +107,10 @@ spec:
                               only "value". The requirements are ANDed.
                             type: object
                         type: object
+                      topologyKey:
+                        description: TopologyKey is a string to group the clusters
+                          by a topology domain.
+                        type: string
                     required:
                     - selector
                     type: object

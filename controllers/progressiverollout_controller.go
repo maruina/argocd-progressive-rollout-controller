@@ -70,7 +70,14 @@ func (r *ProgressiveRolloutReconciler) Reconcile(req ctrl.Request) (ctrl.Result,
 
 		// ArgoCD stores the clusters as Kubernetes secrets
 		// clusterList is every cluster matching stage.Clusters.Selector, including the ones we want to requeue
-		clusterList, err := components.GetSecretListFromSelector(ctx, r.Client, &stage.Clusters.Selector)
+		var clusterList corev1.SecretList
+		var err error
+		if stage.Clusters.TopologyKey != "" {
+			clusterList, err = components.GetSecretListFromSelectorWithTopology(ctx, r.Client, &stage.Clusters.Selector, stage.Clusters.TopologyKey)
+		} else {
+			clusterList, err = components.GetSecretListFromSelector(ctx, r.Client, &stage.Clusters.Selector)
+		}
+
 		if err != nil {
 			r.Log.Error(err, "failed to get clusters")
 			return ctrl.Result{}, err
