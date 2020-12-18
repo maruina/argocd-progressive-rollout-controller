@@ -1,7 +1,7 @@
 # argocd-progressive-rollout-controller
 Progressive Rollout controller for ArgoCD ApplicationSet.
 
-**Status: ALPHA (actively looking for feedback)**
+**Status: Proof of Concept (actively looking for feedback)**
 
 ## Why
 [ApplicationSet](https://github.com/argoproj-labs/applicationset) is being developed as the solution to replace the `app-of-apps` pattern.
@@ -12,21 +12,22 @@ If you enable the [auto-sync](https://argoproj.github.io/argo-cd/user-guide/auto
 
 This might not be a problem if you have only one production cluster, but organizations with tens or hundreds or production cluster need to avoid a global rollout and to release a new version in a safer way.
 
-The `argocd-progressive-rollout-operator` solves this problem by allowing operators to decide _how_ they want to update their Applications.
+The `argocd-progressive-rollout-operator` solves this problem by allowing operators to decide **how** they want to update their Applications.
 
 ## Concepts
 
 - Watch for Applications and Secrets events, using a source reference to track ownership.
 - Use label selectors to retrieve the cluster list.
+- Relies on properly labelling ArgoCD secrets.
 - A cluster can be requeued. This mean the operator will try to update it at the end of the stage. This is useful if you want to temporary bring a cluster offline for maintenance without having to freeze the deployments.
-- _(TODO)_ Topology key to allow grouping clusters. For example, you might want to update few clusters, but only one per region.
+- Topology key to allow grouping clusters. For example, you might want to update few clusters, but only one per region.
 - _(TODO)_ Bake time to allow a deployment to soak for a certain amount of time before moving to the next stage.
 - _(TODO)_ Webhooks to call specific endpoints during the stage. This can be useful to trigger load or smoke tests.
 - _(TODO)_ Metric checks.
 
 ## Example Spec
 
-In the following example we are going to update all the clusters deployed in two regions, targeting 25% of the clusters at the time.
+In the following example we are going to update 2 clusters in EMEA, before updating one region at the time.
 
 If a cluster - the secret object - has the label `drained="true"`, it will be requeued.
 
@@ -37,23 +38,33 @@ metadata:
   name: progressiverollout-sample
   namespace: argocd
 spec:
+  # the object owning the target applications
   sourceRef:
     apiGroup: argoproj.io/v1alpha1
     kind: ApplicationSet
     name: my-app-set
+  # the rollout steps
   stages:
-    - name: eu-central-1
-      maxUnavailable: 25%
-      maxClusters: 100%
+    - name: canary in EMEA
+      # how many clusters to update in parallel
+      maxUnavailable: 2
+      # how many cluster to update from the clusters selector result
+      maxClusters: 2
+      # which clusters to update
       clusters:
         selector:
           matchLabels:
-            region: eu-central-1
+            area: emea
+      # how to group the the clusters selector result
+      topologyKey: region
+      # which clusters to requeue
       requeue:
         selector:
           matchLabels:
             drained: "true"
+        # how many times to reueue a cluster before failing the rollout
         attempts: 5
+        # how often to try to update a reueued cluster
         interval: 30m
     - name: eu-west-1
       maxUnavailable: 25%
@@ -62,6 +73,19 @@ spec:
         selector:
           matchLabels:
             region: eu-west-1
+      requeue:
+        selector:
+          matchLabels:
+            drained: "true"
+        attempts: 5
+        interval: 30m
+    - name: eu-central-1
+      maxUnavailable: 25%
+      maxClusters: 100%
+      clusters:
+        selector:
+          matchLabels:
+            region: eu-central-1
       requeue:
         selector:
           matchLabels:
@@ -157,13 +181,13 @@ make run
 
 ## TODO
 
-- [ ] Add topologyKey for grouping clusters with the same selector
+- [x] Add topologyKey for grouping clusters with the same selector
 - [ ] Add Progressdeadline to allow detecting a stuck deployment
 - [ ] Add annotation on Requeue clusters and handle failure
 - [ ] Failure handling
 - [ ] Add ProgressiveRollout Status
 - [ ] Finalizer
-- [ ] Tests :(
+- [ ] More than one tests :(
 - [ ] Break the scheduling logic into a separate component for better testing
 - [ ] Validation: one ApplicationSet can be referenced only by one ProgressiveRollout object
 - [ ] Validation: sane defaults
