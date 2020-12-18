@@ -122,11 +122,18 @@ func SortClustersByTopologyKey(key string, clusters *corev1.SecretList) corev1.S
 	var output corev1.SecretList
 	// First sort input by name
 	SortClustersByName(clusters)
+	var keys []string
 	topologyMap := make(map[string][]corev1.Secret)
 	for _, c := range clusters.Items {
 		if val, ok := c.Labels[key]; ok {
 			topologyMap[val] = append(topologyMap[val], c)
+			keys = append(keys, val)
 		}
+	}
+	sort.Strings(keys)
+	sortedTopologyMap := make(map[string][]corev1.Secret)
+	for _, k := range keys {
+		sortedTopologyMap[k] = topologyMap[k]
 	}
 
 	// Get the most frequent topology key
