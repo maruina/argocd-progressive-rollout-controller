@@ -25,6 +25,10 @@ The `argocd-progressive-rollout-operator` solves this problem by allowing operat
 - _(TODO)_ Webhooks to call specific endpoints during the stage. This can be useful to trigger load or smoke tests.
 - _(TODO)_ Metric checks.
 
+## Demo
+
+[![ArgoCD Progressive Rollout Controller Demo](http://img.youtube.com/vi/xoaemCbiqzo/0.jpg)](http://www.youtube.com/watch?v=xoaemCbiqzo "ArgoCD Progressive Rollout Controller Demo")
+
 ## Example Spec
 
 In the following example we are going to update 2 clusters in EMEA, before updating one region at the time.
