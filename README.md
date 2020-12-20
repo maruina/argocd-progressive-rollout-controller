@@ -10,7 +10,7 @@ While ApplicationSet is great to programmatically generate Applications, you wil
 
 If you enable the [auto-sync](https://argoproj.github.io/argo-cd/user-guide/auto_sync/) policy, that will update _all_ your generated Application at the same time.
 
-This might not be a problem if you have only one production cluster, but organizations with tens or hundreds or production cluster need to avoid a global rollout and to release a new version in a safer way.
+This might not be a problem if you have only one production cluster, but organizations with tens or hundreds of production clusters need to avoid a global rollout and to release new versions in a safer way.
 
 The `argocd-progressive-rollout-operator` solves this problem by allowing operators to decide **how** they want to update their Applications.
 
@@ -25,7 +25,9 @@ The `argocd-progressive-rollout-operator` solves this problem by allowing operat
 - _(TODO)_ Webhooks to call specific endpoints during the stage. This can be useful to trigger load or smoke tests.
 - _(TODO)_ Metric checks.
 
-## Demo
+## Watch it in action
+
+Click on the image to watch the video.
 
 [![ArgoCD Progressive Rollout Controller Demo](http://img.youtube.com/vi/xoaemCbiqzo/0.jpg)](http://www.youtube.com/watch?v=xoaemCbiqzo "ArgoCD Progressive Rollout Controller Demo")
 
