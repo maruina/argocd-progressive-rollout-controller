@@ -1,9 +1,11 @@
 # argocd-progressive-rollout-controller
+
 Progressive Rollout controller for ArgoCD ApplicationSet.
 
-**Status: Proof of Concept (actively looking for feedback)**
+## Status: Proof of Concept (actively looking for feedback)
 
 ## Why
+
 [ApplicationSet](https://github.com/argoproj-labs/applicationset) is being developed as the solution to replace the `app-of-apps` pattern.
 
 While ApplicationSet is great to programmatically generate Applications, you will still need to solve _how_ to update the Applications. 
@@ -99,6 +101,10 @@ spec:
         attempts: 5
         interval: 30m
 ```
+
+## Usage
+
+There is an available docker image at `maruina/argo-progressive-rollout-controller` but there is no Helm chart yet.
 
 ## Development
 

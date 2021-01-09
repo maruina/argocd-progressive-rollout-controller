@@ -1,0 +1,24 @@
+name: Release docker workflow
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    steps:
+
+    - name: Login to DockerHub
+      uses: docker/login-action@v1
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    - name: Build and push tagged docker image on master
+      uses: docker/build-push-action@v2
+      with:
+        push: true
+        tags: maruina/argocd-progressive-rollout-controller:${{ github.sha }}

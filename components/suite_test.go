@@ -2,8 +2,9 @@ package components
 
 import (
 	"path/filepath"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"testing"
+
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
