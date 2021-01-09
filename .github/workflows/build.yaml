@@ -7,9 +7,9 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
-    steps:    
+    steps:
     - name: Build docker image
       uses: docker/build-push-action@v2
       with:
         push: false
-        repository: maruina/argocd-progressive-rollout-controller
+        tags: maruina/argocd-progressive-rollout-controller:${{ github.sha }}
