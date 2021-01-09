@@ -1,0 +1,15 @@
+name: Build docker workflow
+
+on:
+  pull_request:
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    steps:    
+    - name: Build docker image
+      uses: docker/build-push-action@v2
+      with:
+        push: false
+        repository: maruina/argocd-progressive-rollout-controller
