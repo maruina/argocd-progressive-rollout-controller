@@ -28,7 +28,7 @@ import (
 
 	argov1alpha1 "github.com/argoproj/argo-cd/pkg/apis/application/v1alpha1"
 	deploymentv1alpha1 "github.com/maruina/argocd-progressive-rollout-controller/api/v1alpha1"
-	"github.com/maruina/argocd-progressive-rollout-controller/controllers"
+	"github.com/maruina/argocd-progressive-rollout-controller/pkg/controllers"
 	// +kubebuilder:scaffold:imports
 )
 
