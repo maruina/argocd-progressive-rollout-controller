@@ -2,7 +2,7 @@
 
 Progressive Rollout controller for ArgoCD ApplicationSet.
 
-## Status: Proof of Concept (actively looking for feedback)
+## Status: ~Proof of Concept (actively looking for feedback)~ We're building it at <https://github.com/Skyscanner/argocd-progressive-rollout/>
 
 ## Why
 
